@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { Header } from './components/Header';
 import { LocationModal } from './components/LocationModal';
 import { CircularsView } from './components/CircularsView';
@@ -557,6 +558,8 @@ export default function App() {
         isDealInList={isDealInList}
       />
 
+      {/* Vercel Web Analytics */}
+      <Analytics />
     </div>
   );
 }
