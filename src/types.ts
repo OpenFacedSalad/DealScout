@@ -1,4 +1,4 @@
-export type DealCategory = 
+export type DealCategory =
   | 'produce'
   | 'meat_seafood'
   | 'dairy_eggs'
@@ -8,13 +8,38 @@ export type DealCategory =
   | 'beverages'
   | 'household';
 
-export type DealType = 'sale' | 'bogo' | 'digital_coupon' | 'multi_buy' | 'clearance';
+export type DealType =
+  | 'sale'
+  | 'bogo'
+  | 'digital_coupon'
+  | 'multi_buy'
+  | 'clearance';
+
+export type NormalizedUnitType =
+  | 'lb'
+  | 'oz'
+  | 'unit'
+  | 'gallon'
+  | 'count'
+  | 'dozen';
+
+export type QualityTier =
+  | 'budget'
+  | 'standard'
+  | 'premium'
+  | 'organic';
+
+export type RadiusOption = 1 | 5 | 10 | 25;
+
+export type ActiveTab = 'circulars' | 'compare' | 'list';
+
+export type SortOption = 'discount' | 'price' | 'unit_cost';
 
 export interface Store {
   id: string;
   name: string;
   chain: string;
-  logoColor: string; // Tailwind background / text color
+  logoColor: string;
   logoBg: string;
   logoText: string;
   distanceMiles: number;
@@ -41,64 +66,18 @@ export interface DealItem {
   originalPrice: number;
   salePrice: number;
   discountPercent: number;
-  unitPrice: string; // e.g. "$1.49 / lb"
-  normalizedUnitCost: number; // numeric cost for 1 base unit
-  normalizedUnitType: 'lb' | 'oz' | 'unit' | 'gallon' | 'count' | 'dozen';
-  unitDescription: string; // e.g. "1 lb bag", "12 oz pack", "1 gallon"
+  unitPrice: string;
+  normalizedUnitCost: number;
+  normalizedUnitType: NormalizedUnitType;
+  unitDescription: string;
   dealType: DealType;
-  dealBadge?: string; // e.g. "BOGO FREE", "SAVE 40%", "DIGITAL ONLY"
+  dealBadge?: string;
   validUntil: string;
   inStock: boolean;
-  genericProductGroup: string; // e.g. "apples", "eggs", "milk", "chicken_breast", "ground_beef", "avocados", "strawberries", "bread", "olive_oil", "cheddar_cheese", "salmon", "paper_towels", "coffee", "pasta"
+  genericProductGroup: string;
   tags: string[];
-  imageUrl?: string;
   brand?: string;
-  qualityTier?: 'budget' | 'standard' | 'premium' | 'organic';
-}
-
-export interface ComparisonGroup {
-  productGroup: string;
-  displayName: string;
-  category: DealCategory;
-  dealCount: number;
-  lowestPrice: number;
-  lowestUnitPrice: string;
-  bestDealId: string;
-  bestStoreName: string;
-  deals: DealItem[];
-  aiAnalysis?: {
-    bestDealId: string;
-    verdict: string;
-    keyDifference: string;
-    unitPriceAdvantage: string;
-    caveats?: string;
-  };
-}
-
-export interface ShoppingListItem {
-  id: string;
-  dealId?: string;
-  dealItem?: DealItem;
-  customTitle?: string;
-  storeId: string;
-  storeName: string;
-  storeLogoBg: string;
-  storeLogoText: string;
-  price: number;
-  originalPrice: number;
-  quantity: number;
-  unitPrice?: string;
-  category: DealCategory | 'other';
-  checked: boolean;
-  addedAt: number;
-  notes?: string;
-  betterAlternative?: {
-    storeName: string;
-    salePrice: number;
-    unitPrice: string;
-    savingsAmount: number;
-    dealId: string;
-  };
+  qualityTier?: QualityTier;
 }
 
 export interface UserLocation {
@@ -110,4 +89,45 @@ export interface UserLocation {
   formattedAddress: string;
   isGps: boolean;
   radiusMiles?: number;
+}
+
+export interface AIComparisonResult {
+  bestDealId: string;
+  verdict: string;
+  keyDifference: string;
+  unitPriceAdvantage: string;
+  caveats: string;
+}
+
+export interface ComparisonGroup {
+  genericProductGroup: string;
+  productName: string;
+  category: DealCategory;
+  deals: DealItem[];
+  bestDeal: DealItem;
+  totalStores: number;
+  unitType: NormalizedUnitType;
+  unitPriceDiff: number;
+  maxSavingsPercent: number;
+  aiAnalysis?: AIComparisonResult;
+}
+
+export interface BetterAlternative {
+  cheaperDeal: DealItem;
+  savingsPerUnit: number;
+  totalPotentialSavings: number;
+  savingsPercent: number;
+  summary: string;
+}
+
+export interface ShoppingListItem {
+  id: string;
+  title: string;
+  quantity: number;
+  checked: boolean;
+  deal?: DealItem;
+  betterAlternative?: BetterAlternative | null;
+  customPrice?: number;
+  notes?: string;
+  createdAt: string;
 }

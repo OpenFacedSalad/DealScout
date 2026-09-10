@@ -1,183 +1,356 @@
-import React from 'react';
-import { MapPin, Navigation, ShoppingBag, ArrowLeftRight, Sparkles, Store as StoreIcon, Loader2, Compass } from 'lucide-react';
-import { UserLocation } from '../types';
+import React, { useState, useRef, useEffect } from 'react';
+import {
+  MapPin,
+  Crosshair,
+  FileText,
+  ShoppingCart,
+  Layers,
+  Scale,
+  Sparkles,
+  ChevronDown,
+  Loader2,
+  Code2,
+  Download,
+  Share,
+  X,
+  WifiOff,
+  Camera,
+} from 'lucide-react';
+import { ActiveTab, RadiusOption, UserLocation } from '../types';
+import { usePWAInstall } from '../hooks/usePWAInstall';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
 
 interface HeaderProps {
+  activeTab: ActiveTab;
+  setActiveTab: (tab: ActiveTab) => void;
   location: UserLocation;
-  isLoadingLocation: boolean;
+  radiusMiles: RadiusOption;
+  setRadiusMiles: (radius: RadiusOption) => void;
   onOpenLocationModal: () => void;
-  onDetectGps: () => void;
-  activeTab: 'circulars' | 'compare' | 'list';
-  setActiveTab: (tab: 'circulars' | 'compare' | 'list') => void;
+  onOpenUploadModal: () => void;
+  onDetectGPS: () => void;
+  isGpsLocating: boolean;
+  comparisonCount: number;
   shoppingListCount: number;
   totalSavings: number;
-  comparisonCount: number;
-  radiusMiles: number;
-  onChangeRadius: (radius: number) => void;
+  onOpenDocViewer: (type: 'design' | 'code') => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({
-  location,
-  isLoadingLocation,
-  onOpenLocationModal,
-  onDetectGps,
+const RADIUS_OPTIONS: RadiusOption[] = [1, 5, 10, 25];
+
+export default function Header({
   activeTab,
   setActiveTab,
+  location,
+  radiusMiles,
+  setRadiusMiles,
+  onOpenLocationModal,
+  onOpenUploadModal,
+  onDetectGPS,
+  isGpsLocating,
+  comparisonCount,
   shoppingListCount,
   totalSavings,
-  comparisonCount,
-  radiusMiles,
-  onChangeRadius,
-}) => {
-  const radiusChoices = [1, 5, 10, 25];
+  onOpenDocViewer,
+}: HeaderProps) {
+  const [isDocDropdownOpen, setIsDocDropdownOpen] = useState(false);
+  const [showIOSModal, setShowIOSModal] = useState(false);
+  const docDropdownRef = useRef<HTMLDivElement>(null);
+
+  const isOnline = useNetworkStatus();
+  const { isInstallable, isIOS, isStandalone, triggerInstall } = usePWAInstall();
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (docDropdownRef.current && !docDropdownRef.current.contains(event.target as Node)) {
+        setIsDocDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (isIOS) {
+      setShowIOSModal(true);
+    } else {
+      await triggerInstall();
+    }
+  };
 
   return (
-    <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-stone-200">
+    <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-xs">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16 sm:h-20 gap-3">
-          
-          {/* Brand & Tagline */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-xs shadow-emerald-200">
-              <StoreIcon className="w-5 h-5" />
+        <div className="py-3 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 sm:border-none">
+          {/* Brand Identity */}
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 flex items-center justify-center text-white shadow-md shadow-emerald-700/20">
+              <Sparkles className="w-5 h-5 text-emerald-100" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-base sm:text-lg font-bold text-stone-900 tracking-tight leading-tight">
-                  DealScout
-                </h1>
-                <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <Sparkles className="w-3 h-3 mr-1 text-emerald-600" />
-                  Live Local Matcher
+              <div className="flex items-center space-x-2">
+                <span className="text-xl font-black tracking-tight text-slate-900 font-sans">
+                  Deal<span className="text-emerald-600">Scout</span>
+                </span>
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  v2.2
                 </span>
               </div>
-              <p className="text-xs text-stone-500 hidden md:block">
-                Weekly circular flyers compared by unit price for best local grocery savings
+              <p className="text-[11px] text-slate-500 hidden sm:block">
+                Live Grocery Circulars & Unit Price Matcher
               </p>
             </div>
           </div>
 
-          {/* Location & Radius Controls */}
-          <div className="flex items-center gap-2">
-            
-            {/* Radius Selector Pill */}
-            <div className="hidden lg:flex items-center bg-stone-100 p-1 rounded-xl border border-stone-200 text-xs">
-              <span className="px-2 font-semibold text-stone-500 flex items-center gap-1">
-                <Compass className="w-3 h-3 text-stone-400" />
+          {/* Location, Scan Flyer, GPS, Radius, Install, and Docs */}
+          <div className="flex items-center space-x-2">
+            {!isOnline && (
+              <div className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 text-[11px] font-bold">
+                <WifiOff className="w-3.5 h-3.5 text-amber-700" />
+                <span className="hidden sm:inline">Offline (Cached)</span>
+              </div>
+            )}
+
+            <button
+              onClick={onOpenUploadModal}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold transition shadow-xs"
+              title="Upload circular PDF or scan photo"
+            >
+              <Camera className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="hidden sm:inline">Scan Flyer</span>
+            </button>
+
+            <button
+              onClick={onOpenLocationModal}
+              className="group flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 text-xs font-medium text-slate-700 transition"
+              title="Change search location"
+            >
+              <MapPin className="w-3.5 h-3.5 text-emerald-600 group-hover:scale-110 transition-transform" />
+              <span className="font-semibold text-slate-900 truncate max-w-[130px] sm:max-w-[170px]">
+                {location.city || 'Select Area'}, {location.state}
+              </span>
+              {location.zipCode && (
+                <span className="text-slate-500 font-mono hidden sm:inline">
+                  {location.zipCode}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={onDetectGPS}
+              disabled={isGpsLocating}
+              className={`p-2 rounded-lg border text-xs font-medium transition flex items-center justify-center ${
+                location.isGps
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
+                  : 'bg-slate-100 border-slate-200 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+              }`}
+              title={location.isGps ? 'GPS Location Active' : 'Acquire Live GPS Coordinates'}
+            >
+              {isGpsLocating ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+              ) : (
+                <Crosshair
+                  className={`w-3.5 h-3.5 ${location.isGps ? 'text-emerald-600' : 'text-slate-500'}`}
+                />
+              )}
+            </button>
+
+            <div className="hidden md:flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs">
+              <span className="px-2 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
                 Radius:
               </span>
-              <div className="flex items-center gap-0.5">
-                {radiusChoices.map((r) => (
-                  <button
-                    key={r}
-                    id={`header-radius-btn-${r}`}
-                    onClick={() => onChangeRadius(r)}
-                    className={`px-2 py-1 rounded-lg font-bold transition cursor-pointer ${
-                      radiusMiles === r
-                        ? 'bg-emerald-600 text-white shadow-xs'
-                        : 'text-stone-600 hover:text-stone-900 hover:bg-stone-200/60'
-                    }`}
-                  >
-                    {r}mi
-                  </button>
-                ))}
-              </div>
+              {RADIUS_OPTIONS.map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setRadiusMiles(r)}
+                  className={`px-2 py-1 rounded font-semibold text-[11px] transition ${
+                    radiusMiles === r
+                      ? 'bg-white text-emerald-700 shadow-xs border border-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {r}mi
+                </button>
+              ))}
             </div>
 
-            {/* Location Pill */}
-            <button
-              id="location-selector-btn"
-              onClick={onOpenLocationModal}
-              className="flex items-center gap-2 px-3 py-1.5 sm:px-3.5 sm:py-2 bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded-lg text-xs sm:text-sm font-medium text-stone-700 transition cursor-pointer"
-              title="Change location or enter zip code"
-            >
-              <MapPin className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-600 flex-shrink-0" />
-              <div className="text-left">
-                <span className="font-semibold text-stone-900 block truncate max-w-[120px] sm:max-w-[170px]">
-                  {location.city}, {location.state}
-                </span>
-                <span className="text-[10px] text-stone-400 block -mt-0.5">
-                  {location.zipCode ? `ZIP ${location.zipCode}` : location.isGps ? 'GPS Location' : 'Local Region'} • {radiusMiles}mi
-                </span>
-              </div>
-            </button>
+            {!isStandalone && (isInstallable || isIOS) && (
+              <button
+                onClick={handleInstallClick}
+                className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition shadow-xs"
+                title="Install DealScout on your home screen"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="hidden sm:inline">Install</span>
+              </button>
+            )}
 
-            {/* GPS Detection Button */}
-            <button
-              id="detect-gps-header-btn"
-              onClick={onDetectGps}
-              disabled={isLoadingLocation}
-              className="p-2 sm:px-2.5 sm:py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-medium flex items-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
-              title="Auto-detect current GPS location"
-            >
-              {isLoadingLocation ? (
-                <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
-              ) : (
-                <Navigation className="w-4 h-4 text-emerald-600" />
+            <div className="relative" ref={docDropdownRef}>
+              <button
+                onClick={() => setIsDocDropdownOpen(!isDocDropdownOpen)}
+                className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium transition"
+              >
+                <FileText className="w-3.5 h-3.5 text-slate-500" />
+                <span className="hidden sm:inline">Docs</span>
+                <ChevronDown className="w-3 h-3 text-slate-400" />
+              </button>
+
+              {isDocDropdownOpen && (
+                <div className="absolute right-0 mt-1.5 w-48 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
+                  <button
+                    onClick={() => {
+                      setIsDocDropdownOpen(false);
+                      onOpenDocViewer('design');
+                    }}
+                    className="w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center space-x-2"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>System Design Doc</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsDocDropdownOpen(false);
+                      onOpenDocViewer('code');
+                    }}
+                    className="w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center space-x-2"
+                  >
+                    <Code2 className="w-3.5 h-3.5 text-teal-600" />
+                    <span>Code Structure Spec</span>
+                  </button>
+                  <div className="my-1 border-t border-slate-100" />
+                  <a
+                    href="/DESIGN_DOCUMENT.txt"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block px-3.5 py-1.5 text-[11px] text-slate-500 hover:bg-slate-50"
+                  >
+                    Open Raw Design .txt
+                  </a>
+                  <a
+                    href="/CODE_STRUCTURE.txt"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block px-3.5 py-1.5 text-[11px] text-slate-500 hover:bg-slate-50"
+                  >
+                    Open Raw Code .txt
+                  </a>
+                </div>
               )}
-              <span className="hidden md:inline font-semibold">Live GPS</span>
-            </button>
+            </div>
           </div>
+        </div>
 
-          {/* View Mode Tabs */}
-          <div className="flex items-center bg-stone-100 p-1 rounded-xl border border-stone-200 text-xs sm:text-sm font-medium">
+        {/* Tab Navigation */}
+        <div className="flex items-center justify-between py-2 border-t border-slate-100">
+          <nav className="flex items-center space-x-2 sm:space-x-4">
             <button
-              id="tab-circulars-btn"
               onClick={() => setActiveTab('circulars')}
-              className={`px-2.5 sm:px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition cursor-pointer ${
+              className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition ${
                 activeTab === 'circulars'
-                  ? 'bg-white text-stone-900 shadow-xs font-semibold'
-                  : 'text-stone-600 hover:text-stone-900'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
-              <StoreIcon className="w-4 h-4" />
-              <span className="hidden sm:inline">Circulars</span>
+              <Layers className="w-4 h-4" />
+              <span>Circulars</span>
             </button>
 
             <button
-              id="tab-compare-btn"
               onClick={() => setActiveTab('compare')}
-              className={`px-2.5 sm:px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition cursor-pointer relative ${
+              className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition ${
                 activeTab === 'compare'
-                  ? 'bg-white text-stone-900 shadow-xs font-semibold'
-                  : 'text-stone-600 hover:text-stone-900'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
-              <ArrowLeftRight className="w-4 h-4 text-amber-600" />
-              <span className="hidden sm:inline">Compare</span>
+              <Scale className="w-4 h-4" />
+              <span>Compare Deals</span>
               {comparisonCount > 0 && (
-                <span className="px-1.5 py-0.2 bg-amber-500 text-white rounded-full text-[10px] font-bold">
+                <span
+                  className={`ml-1 text-[11px] font-bold px-1.5 py-0.5 rounded-full ${
+                    activeTab === 'compare'
+                      ? 'bg-white/25 text-white'
+                      : 'bg-emerald-100 text-emerald-800'
+                  }`}
+                >
                   {comparisonCount}
                 </span>
               )}
             </button>
 
             <button
-              id="tab-list-btn"
               onClick={() => setActiveTab('list')}
-              className={`px-2.5 sm:px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition cursor-pointer relative ${
+              className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition ${
                 activeTab === 'list'
-                  ? 'bg-white text-stone-900 shadow-xs font-semibold'
-                  : 'text-stone-600 hover:text-stone-900'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
-              <ShoppingBag className="w-4 h-4 text-emerald-600" />
-              <span className="hidden sm:inline">List</span>
+              <ShoppingCart className="w-4 h-4" />
+              <span>Shopping List</span>
               {shoppingListCount > 0 && (
-                <span className="px-1.5 py-0.2 bg-emerald-600 text-white rounded-full text-[10px] font-bold">
+                <span
+                  className={`ml-1 text-[11px] font-bold px-1.5 py-0.5 rounded-full ${
+                    activeTab === 'list'
+                      ? 'bg-white/25 text-white'
+                      : 'bg-slate-200 text-slate-800'
+                  }`}
+                >
                   {shoppingListCount}
                 </span>
               )}
-              {totalSavings > 0 && (
-                <span className="hidden xl:inline text-[11px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md ml-1">
-                  Save ${totalSavings.toFixed(2)}
-                </span>
-              )}
             </button>
-          </div>
+          </nav>
 
+          {totalSavings > 0 && (
+            <div className="hidden sm:flex items-center space-x-1.5 px-3 py-1 bg-amber-50 border border-amber-200 rounded-full text-xs font-semibold text-amber-900">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+              <span>Switch Deals & Save:</span>
+              <span className="text-emerald-700 font-bold">${totalSavings.toFixed(2)}</span>
+            </div>
+          )}
         </div>
       </div>
+
+      {showIOSModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white max-w-sm w-full p-5 rounded-2xl shadow-xl border border-slate-200 text-xs">
+            <div className="flex items-start justify-between gap-2 mb-3">
+              <div className="flex items-center space-x-2 font-black text-slate-900 text-sm">
+                <Share className="w-4 h-4 text-emerald-600" />
+                <span>Install DealScout on iOS</span>
+              </div>
+              <button
+                onClick={() => setShowIOSModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+                aria-label="Close dialog"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-slate-600 mb-3">
+              Safari does not support automatic prompts. You can add the app directly from your browser menu:
+            </p>
+            <ol className="list-decimal pl-5 space-y-1.5 text-slate-700 font-medium">
+              <li>
+                Tap the <strong className="text-slate-900">Share</strong> icon at the bottom of Safari.
+              </li>
+              <li>
+                Scroll down the share sheet and tap <strong className="text-slate-900">Add to Home Screen</strong>.
+              </li>
+              <li>
+                Tap <strong className="text-emerald-600">Add</strong> in the top-right corner.
+              </li>
+            </ol>
+            <button
+              onClick={() => setShowIOSModal(false)}
+              className="mt-4 w-full py-2 bg-slate-900 text-white font-bold rounded-xl text-center"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
     </header>
   );
-};
+}

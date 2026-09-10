@@ -1,361 +1,435 @@
-import React, { useState } from 'react';
-import { ShoppingBag, Check, Trash2, Plus, Minus, Store, Sparkles, ArrowRight, Share2, Printer, AlertTriangle, ArrowLeftRight, CheckCircle2 } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import {
+  ShoppingCart,
+  Plus,
+  Trash2,
+  CheckSquare,
+  Square,
+  ArrowRightLeft,
+  Sparkles,
+  CloudOff,
+  RefreshCw,
+  Loader2,
+} from 'lucide-react';
 import { ShoppingListItem, DealItem } from '../types';
+import { useSyncQueue } from '../hooks/useSyncQueue';
 
 interface ShoppingListViewProps {
   items: ShoppingListItem[];
-  onToggleItem: (id: string) => void;
   onRemoveItem: (id: string) => void;
+  onToggleChecked: (id: string) => void;
   onUpdateQuantity: (id: string, delta: number) => void;
-  onAddCustomItem: (title: string, storeName?: string) => void;
-  onSwapBetterDeal: (itemId: string, newDealId: string) => void;
-  allDeals: DealItem[];
-  onClearCompleted: () => void;
+  onAddCustomItem: (title: string) => void;
+  onSwapDeal: (itemId: string, cheaperDeal: DealItem) => void;
 }
 
-export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
+export default function ShoppingListView({
   items,
-  onToggleItem,
   onRemoveItem,
+  onToggleChecked,
   onUpdateQuantity,
   onAddCustomItem,
-  onSwapBetterDeal,
-  allDeals,
-  onClearCompleted,
-}) => {
-  const [groupBy, setGroupBy] = useState<'store' | 'category'>('store');
-  const [customItemText, setCustomItemText] = useState('');
-  const [copySuccess, setCopySuccess] = useState(false);
+  onSwapDeal,
+}: ShoppingListViewProps) {
+  const [newItemTitle, setNewItemTitle] = useState('');
+  const [viewMode, setViewMode] = useState<'all' | 'by_store'>('by_store');
+  const { pendingCount, pendingItemIds, isOnline, hasUnsyncedChanges } = useSyncQueue();
 
-  // Financial calculations
-  const totalCost = items.reduce((sum, item) => sum + (item.checked ? 0 : item.price * item.quantity), 0);
-  const totalOriginal = items.reduce(
-    (sum, item) => sum + (item.checked ? 0 : (item.originalPrice || item.price) * item.quantity),
-    0
-  );
-  const totalSavings = Math.max(0, totalOriginal - totalCost);
-  const completedCount = items.filter((i) => i.checked).length;
-
-  const handleAddCustom = (e: React.FormEvent) => {
+  const handleAddItemSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (customItemText.trim()) {
-      onAddCustomItem(customItemText.trim());
-      setCustomItemText('');
+    if (newItemTitle.trim()) {
+      onAddCustomItem(newItemTitle.trim());
+      setNewItemTitle('');
     }
   };
 
-  const handleCopyList = () => {
-    const listText = items
-      .map(
-        (i) =>
-          `[${i.checked ? 'X' : ' '}] ${i.quantity}x ${i.dealItem?.title || i.customTitle} ($${(
-            i.price * i.quantity
-          ).toFixed(2)}) - ${i.storeName}`
-      )
-      .join('\n');
-    const header = `My Grocery Shopping List (Est Total: $${totalCost.toFixed(2)}, Saved: $${totalSavings.toFixed(
-      2
-    )})\n-------------------------------------\n`;
-    navigator.clipboard.writeText(header + listText);
-    setCopySuccess(true);
-    setTimeout(() => setCopySuccess(false), 2000);
-  };
+  const totalEstimatedCost = useMemo(() => {
+    return items.reduce((sum, item) => {
+      const price = item.deal ? item.deal.salePrice : item.customPrice || 0;
+      return sum + price * (item.quantity || 1);
+    }, 0);
+  }, [items]);
 
-  const handlePrint = () => {
-    window.print();
-  };
+  const potentialWeeklySavings = useMemo(() => {
+    return items.reduce((sum, item) => {
+      if (!item.checked && item.betterAlternative) {
+        return sum + item.betterAlternative.totalPotentialSavings;
+      }
+      return sum + (item.deal ? (item.deal.originalPrice - item.deal.salePrice) * (item.quantity || 1) : 0);
+    }, 0);
+  }, [items]);
 
-  // Group items by store or category
-  const groups: { [key: string]: ShoppingListItem[] } = {};
-  items.forEach((item) => {
-    const key = groupBy === 'store' ? item.storeName : item.category;
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(item);
-  });
+  const checkedCount = useMemo(() => items.filter((i) => i.checked).length, [items]);
+
+  const groupedByStore = useMemo(() => {
+    const map = new Map<string, { storeName: string; logoBg: string; logoText: string; items: ShoppingListItem[] }>();
+
+    items.forEach((item) => {
+      const storeId = item.deal ? item.deal.storeId : 'custom';
+      const storeName = item.deal ? item.deal.storeName : 'Other / Custom Items';
+      const logoBg = item.deal ? item.deal.storeLogoBg : '#475569';
+      const logoText = item.deal ? item.deal.storeLogoText : 'LIST';
+
+      if (!map.has(storeId)) {
+        map.set(storeId, { storeName, logoBg, logoText, items: [] });
+      }
+      map.get(storeId)!.items.push(item);
+    });
+
+    return Array.from(map.entries());
+  }, [items]);
 
   return (
     <div className="space-y-6">
-      
-      {/* Top Banner & Summary Card */}
-      <div className="bg-stone-900 text-white rounded-3xl p-6 sm:p-8 shadow-xl border border-stone-800">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-bold uppercase tracking-wider mb-2 border border-emerald-500/30">
-              <ShoppingBag className="w-3.5 h-3.5" />
-              Digital Shopping Cart & Planner
-            </div>
-            <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
-              Your Grocery Deals Shopping List
-            </h2>
-            <p className="text-stone-400 text-sm mt-1">
-              Organized by store circulars with active unit-price discounts
-            </p>
+      {/* 1. Header & Basket Summary */}
+      <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center space-x-2 text-xs font-bold text-emerald-700 uppercase tracking-wider">
+            <ShoppingCart className="w-4 h-4 text-emerald-600" />
+            <span>Smart Shopping Cart & Deal Monitor</span>
+          </div>
+          <h1 className="text-xl sm:text-2xl font-black text-slate-900 mt-1 tracking-tight">
+            Weekly Grocery Trip Planner
+          </h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {items.length} item{items.length === 1 ? '' : 's'} total &bull; {checkedCount} checked off
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="bg-slate-50 px-3.5 py-2 rounded-xl border border-slate-100 text-right">
+            <span className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+              Est. Basket Total
+            </span>
+            <span className="text-lg font-black text-slate-900 font-mono">
+              ${totalEstimatedCost.toFixed(2)}
+            </span>
           </div>
 
-          {/* Quick Metrics */}
-          <div className="flex items-center gap-4 bg-stone-800/80 p-4 rounded-2xl border border-stone-700/60 flex-wrap">
-            <div>
-              <span className="text-xs text-stone-400 block font-medium">Estimated Total</span>
-              <span className="text-2xl sm:text-3xl font-black text-white">
-                ${totalCost.toFixed(2)}
-              </span>
-            </div>
-            <div className="h-10 w-px bg-stone-700 mx-1" />
-            <div>
-              <span className="text-xs text-stone-400 block font-medium">Circular Savings</span>
-              <span className="text-2xl sm:text-3xl font-black text-emerald-400">
-                +${totalSavings.toFixed(2)}
-              </span>
-            </div>
-            <div className="h-10 w-px bg-stone-700 mx-1 hidden sm:block" />
-            <div className="hidden sm:block">
-              <span className="text-xs text-stone-400 block font-medium">Progress</span>
-              <span className="text-sm font-bold text-stone-200">
-                {completedCount} of {items.length} done
-              </span>
-            </div>
+          <div className="bg-emerald-50 px-3.5 py-2 rounded-xl border border-emerald-100 text-right">
+            <span className="block text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">
+              Total Weekly Savings
+            </span>
+            <span className="text-lg font-black text-emerald-800 font-mono">
+              ${potentialWeeklySavings.toFixed(2)}
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Control Bar: Custom Add, Grouping, Print/Share */}
-      <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
-        
-        {/* Custom Item Form */}
-        <form onSubmit={handleAddCustom} className="flex gap-2 w-full sm:w-96">
+      {/* 2. Unsynced Offline Changes Alert */}
+      {hasUnsyncedChanges && (
+        <div className="bg-amber-50 border border-amber-200/90 rounded-2xl p-3.5 flex items-center justify-between text-xs animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center space-x-2.5 min-w-0">
+            {isOnline ? (
+              <RefreshCw className="w-4 h-4 text-amber-600 animate-spin shrink-0" />
+            ) : (
+              <CloudOff className="w-4 h-4 text-amber-700 shrink-0" />
+            )}
+            <div>
+              <span className="font-bold text-amber-900">
+                {isOnline ? 'Syncing edits...' : 'Offline Changes Queued'}
+              </span>
+              <p className="text-amber-800 text-[11px] mt-0.5">
+                {pendingCount} item modification{pendingCount > 1 ? 's' : ''} saved locally.
+                {!isOnline && ' Will sync automatically when reconnected.'}
+              </p>
+            </div>
+          </div>
+
+          <span className="px-2 py-0.5 rounded-full bg-amber-200/80 text-amber-900 font-mono font-bold text-[10px] shrink-0 ml-2">
+            {pendingCount} Pending
+          </span>
+        </div>
+      )}
+
+      {/* 3. Add Custom Item Form & Grouping Controls */}
+      <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <form onSubmit={handleAddItemSubmit} className="flex-1 flex items-center gap-2">
           <input
-            id="add-custom-item-input"
             type="text"
-            value={customItemText}
-            onChange={(e) => setCustomItemText(e.target.value)}
-            placeholder="Add custom item (e.g. Cinnamon, Napkins)..."
-            className="flex-1 px-3.5 py-2 bg-white border border-stone-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-xs"
+            value={newItemTitle}
+            onChange={(e) => setNewItemTitle(e.target.value)}
+            placeholder="Add custom item (e.g., Paper towels, Garlic, Bagels)..."
+            className="flex-1 px-4 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
           />
           <button
-            id="add-custom-item-btn"
             type="submit"
-            disabled={!customItemText.trim()}
-            className="px-4 py-2 bg-stone-900 hover:bg-stone-800 disabled:opacity-40 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+            className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition flex items-center space-x-1.5 shrink-0 shadow-xs"
           >
-            <Plus className="w-4 h-4" />
-            <span>Add</span>
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add to List</span>
           </button>
         </form>
 
-        {/* Grouping & Actions */}
-        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-          <div className="flex bg-stone-100 p-1 rounded-xl border border-stone-200 text-xs font-semibold">
-            <button
-              id="group-by-store-btn"
-              onClick={() => setGroupBy('store')}
-              className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
-                groupBy === 'store' ? 'bg-white text-stone-900 shadow-xs' : 'text-stone-500 hover:text-stone-900'
-              }`}
-            >
-              By Store
-            </button>
-            <button
-              id="group-by-category-btn"
-              onClick={() => setGroupBy('category')}
-              className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
-                groupBy === 'category' ? 'bg-white text-stone-900 shadow-xs' : 'text-stone-500 hover:text-stone-900'
-              }`}
-            >
-              By Category
-            </button>
-          </div>
-
+        <div className="flex items-center space-x-1.5 self-end sm:self-auto border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100">
+          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider pr-1">
+            View:
+          </span>
           <button
-            id="copy-shopping-list-btn"
-            onClick={handleCopyList}
-            className="px-3 py-2 bg-white hover:bg-stone-50 border border-stone-200 rounded-xl text-xs font-bold text-stone-700 flex items-center gap-1.5 transition shadow-xs cursor-pointer"
-            title="Copy list to clipboard"
+            onClick={() => setViewMode('by_store')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+              viewMode === 'by_store'
+                ? 'bg-emerald-100 text-emerald-800'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
           >
-            {copySuccess ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Share2 className="w-3.5 h-3.5" />}
-            <span>{copySuccess ? 'Copied!' : 'Copy'}</span>
+            Group by Store
           </button>
-
-          {completedCount > 0 && (
-            <button
-              id="clear-completed-list-btn"
-              onClick={onClearCompleted}
-              className="px-3 py-2 bg-stone-100 hover:bg-stone-200 text-stone-600 hover:text-red-700 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Clear Done</span>
-            </button>
-          )}
+          <button
+            onClick={() => setViewMode('all')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+              viewMode === 'all'
+                ? 'bg-emerald-100 text-emerald-800'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            Flat List
+          </button>
         </div>
-
       </div>
 
-      {/* Empty State */}
+      {/* 4. Cart List */}
       {items.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-3xl border border-dashed border-stone-300 p-8">
-          <div className="w-14 h-14 rounded-2xl bg-stone-100 text-stone-400 flex items-center justify-center mx-auto mb-4">
-            <ShoppingBag className="w-7 h-7" />
+        <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
+          <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400 mb-3">
+            <ShoppingCart className="w-6 h-6" />
           </div>
-          <h3 className="text-lg font-bold text-stone-800">Your Shopping List is Empty</h3>
-          <p className="text-sm text-stone-500 max-w-md mx-auto mt-1 mb-5">
-            Browse current local grocery flyers or compare similar deals to save items directly to your digital list.
+          <h3 className="text-base font-bold text-slate-800">Your shopping list is empty</h3>
+          <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+            Add items from the Weekly Circulars feed, or type custom items in the bar above.
           </p>
         </div>
-      ) : (
-        /* Grouped Items List */
+      ) : viewMode === 'by_store' ? (
         <div className="space-y-6">
-          {Object.entries(groups).map(([groupName, groupItems]) => {
-            const groupSubtotal = groupItems.reduce(
-              (sum, item) => sum + (item.checked ? 0 : item.price * item.quantity),
-              0
-            );
+          {groupedByStore.map(([storeKey, group]) => {
+            const storeSubtotal = group.items.reduce((sum, item) => {
+              const price = item.deal ? item.deal.salePrice : item.customPrice || 0;
+              return sum + price * (item.quantity || 1);
+            }, 0);
 
             return (
-              <div key={groupName} className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs">
-                
-                {/* Group Header */}
-                <div className="px-5 py-3.5 bg-stone-50 border-b border-stone-200/80 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Store className="w-4 h-4 text-emerald-700" />
-                    <h3 className="font-extrabold text-stone-900 text-sm sm:text-base capitalize">
-                      {groupName}
-                    </h3>
-                    <span className="text-xs text-stone-500 font-medium">
-                      ({groupItems.length} {groupItems.length === 1 ? 'item' : 'items'})
+              <div
+                key={storeKey}
+                className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs"
+              >
+                <div className="bg-slate-50/80 px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <span
+                      className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider"
+                      style={{ backgroundColor: group.logoBg, color: '#FFFFFF' }}
+                    >
+                      {group.logoText}
+                    </span>
+                    <h2 className="text-sm font-black text-slate-900">{group.storeName}</h2>
+                    <span className="text-xs text-slate-400 font-medium">
+                      ({group.items.length} item{group.items.length === 1 ? '' : 's'})
                     </span>
                   </div>
-                  <span className="text-xs font-bold text-stone-700">
-                    Subtotal: ${groupSubtotal.toFixed(2)}
-                  </span>
+
+                  <div className="text-xs font-bold text-slate-700">
+                    Subtotal: <span className="font-mono">${storeSubtotal.toFixed(2)}</span>
+                  </div>
                 </div>
 
-                {/* Items in Group */}
-                <div className="divide-y divide-stone-100">
-                  {groupItems.map((item) => {
-                    const title = item.dealItem?.title || item.customTitle;
-                    const itemTotal = item.price * item.quantity;
-
-                    return (
-                      <div
-                        key={item.id}
-                        className={`p-4 sm:px-5 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-                          item.checked ? 'bg-stone-50/70 opacity-60' : 'hover:bg-stone-50/40'
-                        }`}
-                      >
-                        {/* Checkbox & Details */}
-                        <div className="flex items-start sm:items-center gap-3.5 flex-1">
-                          <button
-                            id={`check-item-${item.id}`}
-                            onClick={() => onToggleItem(item.id)}
-                            className={`w-5 h-5 rounded-md border flex items-center justify-center mt-0.5 sm:mt-0 transition flex-shrink-0 cursor-pointer ${
-                              item.checked
-                                ? 'bg-emerald-600 border-emerald-600 text-white'
-                                : 'border-stone-300 hover:border-emerald-500 bg-white'
-                            }`}
-                          >
-                            {item.checked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-                          </button>
-
-                          <div className="flex-1">
-                            <div className="flex items-baseline gap-2 flex-wrap">
-                              <span
-                                className={`text-sm font-bold leading-snug ${
-                                  item.checked ? 'line-through text-stone-400' : 'text-stone-900'
-                                }`}
-                              >
-                                {title}
-                              </span>
-                              {item.unitPrice && (
-                                <span className="text-xs text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.2 rounded">
-                                  {item.unitPrice}
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Store tag if grouped by category */}
-                            {groupBy === 'category' && (
-                              <span className="text-[11px] text-stone-500 mt-0.5 block">
-                                Store: {item.storeName}
-                              </span>
-                            )}
-
-                            {/* Better Deal Notification Badge */}
-                            {item.betterAlternative && !item.checked && (
-                              <div className="mt-2 p-2 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between gap-2 max-w-lg">
-                                <div className="flex items-center gap-1.5 text-xs text-amber-900">
-                                  <Sparkles className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
-                                  <span>
-                                    <strong>Cheaper at {item.betterAlternative.storeName}</strong> ({item.betterAlternative.unitPrice}) — Save ${item.betterAlternative.savingsAmount.toFixed(2)}
-                                  </span>
-                                </div>
-                                <button
-                                  id={`swap-better-deal-${item.id}`}
-                                  onClick={() => onSwapBetterDeal(item.id, item.betterAlternative!.dealId)}
-                                  className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold rounded-lg transition whitespace-nowrap cursor-pointer"
-                                >
-                                  Swap Deal
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Quantity & Actions */}
-                        <div className="flex items-center justify-between sm:justify-end gap-4 pl-8 sm:pl-0">
-                          {/* Quantity Controls */}
-                          <div className="flex items-center border border-stone-200 rounded-lg bg-white overflow-hidden shadow-2xs">
-                            <button
-                              id={`qty-minus-${item.id}`}
-                              onClick={() => onUpdateQuantity(item.id, -1)}
-                              className="p-1.5 text-stone-500 hover:text-stone-900 hover:bg-stone-100 transition cursor-pointer"
-                            >
-                              <Minus className="w-3 h-3" />
-                            </button>
-                            <span className="px-2.5 text-xs font-bold text-stone-800">
-                              {item.quantity}
-                            </span>
-                            <button
-                              id={`qty-plus-${item.id}`}
-                              onClick={() => onUpdateQuantity(item.id, 1)}
-                              className="p-1.5 text-stone-500 hover:text-stone-900 hover:bg-stone-100 transition cursor-pointer"
-                            >
-                              <Plus className="w-3 h-3" />
-                            </button>
-                          </div>
-
-                          {/* Price */}
-                          <div className="text-right min-w-[65px]">
-                            <div className="text-sm font-black text-stone-900">
-                              ${itemTotal.toFixed(2)}
-                            </div>
-                            {item.originalPrice > item.price && (
-                              <div className="text-[10px] text-stone-400 line-through">
-                                ${(item.originalPrice * item.quantity).toFixed(2)}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Delete Item */}
-                          <button
-                            id={`remove-item-${item.id}`}
-                            onClick={() => onRemoveItem(item.id)}
-                            className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition cursor-pointer"
-                            title="Remove from list"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-
-                      </div>
-                    );
-                  })}
+                <div className="divide-y divide-slate-100">
+                  {group.items.map((item) => (
+                    <ShoppingListItemRow
+                      key={item.id}
+                      item={item}
+                      isPendingSync={pendingItemIds.has(item.id)}
+                      onToggleChecked={onToggleChecked}
+                      onUpdateQuantity={onUpdateQuantity}
+                      onRemoveItem={onRemoveItem}
+                      onSwapDeal={onSwapDeal}
+                    />
+                  ))}
                 </div>
-
               </div>
             );
           })}
         </div>
+      ) : (
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs divide-y divide-slate-100">
+          {items.map((item) => (
+            <ShoppingListItemRow
+              key={item.id}
+              item={item}
+              isPendingSync={pendingItemIds.has(item.id)}
+              onToggleChecked={onToggleChecked}
+              onUpdateQuantity={onUpdateQuantity}
+              onRemoveItem={onRemoveItem}
+              onSwapDeal={onSwapDeal}
+            />
+          ))}
+        </div>
       )}
-
     </div>
   );
-};
+}
+
+interface ItemRowProps {
+  key?: string;
+  item: ShoppingListItem;
+  isPendingSync?: boolean;
+  onToggleChecked: (id: string) => void;
+  onUpdateQuantity: (id: string, delta: number) => void;
+  onRemoveItem: (id: string) => void;
+  onSwapDeal: (itemId: string, cheaperDeal: DealItem) => void;
+}
+
+function ShoppingListItemRow({
+  item,
+  isPendingSync = false,
+  onToggleChecked,
+  onUpdateQuantity,
+  onRemoveItem,
+  onSwapDeal,
+}: ItemRowProps) {
+  const deal = item.deal;
+  const itemPrice = deal ? deal.salePrice : item.customPrice || 0;
+  const lineTotal = itemPrice * item.quantity;
+  const hasAlternative = !item.checked && Boolean(item.betterAlternative);
+
+  return (
+    <div
+      className={`p-4 transition-all duration-300 ${
+        isPendingSync
+          ? 'bg-amber-50/60 ring-1 ring-amber-300/80 animate-pulse'
+          : item.checked
+          ? 'bg-slate-50/70'
+          : 'bg-white hover:bg-slate-50/40'
+      }`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center space-x-3 min-w-0 flex-1">
+          <button
+            onClick={() => onToggleChecked(item.id)}
+            className="text-slate-400 hover:text-emerald-600 transition shrink-0"
+            title={item.checked ? 'Mark active' : 'Mark completed'}
+          >
+            {item.checked ? (
+              <CheckSquare className="w-5 h-5 text-emerald-600 fill-emerald-50" />
+            ) : (
+              <Square className="w-5 h-5" />
+            )}
+          </button>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center space-x-2">
+              <span
+                className={`text-sm font-bold truncate ${
+                  item.checked ? 'line-through text-slate-400' : 'text-slate-900'
+                }`}
+              >
+                {item.title}
+              </span>
+
+              {isPendingSync && (
+                <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-amber-200/70 text-amber-900 text-[10px] font-bold tracking-tight shrink-0 animate-pulse">
+                  <Loader2 className="w-2.5 h-2.5 animate-spin text-amber-700" />
+                  <span>Syncing...</span>
+                </span>
+              )}
+
+              {deal?.dealBadge && !item.checked && (
+                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold uppercase bg-rose-50 text-rose-700 border border-rose-200 shrink-0">
+                  {deal.dealBadge}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center space-x-2 text-xs text-slate-500 mt-0.5">
+              {deal ? (
+                <>
+                  <span className="font-semibold text-slate-700">{deal.storeName}</span>
+                  <span>&bull;</span>
+                  <span className="font-mono text-emerald-700 font-bold">{deal.unitPrice}</span>
+                  <span>&bull;</span>
+                  <span>${deal.salePrice.toFixed(2)} pkg</span>
+                </>
+              ) : (
+                <span className="italic text-slate-400">Custom user item</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-4 shrink-0">
+          <div className="flex items-center space-x-1.5 bg-slate-100 rounded-lg p-1">
+            <button
+              onClick={() => onUpdateQuantity(item.id, -1)}
+              className="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:bg-white hover:text-slate-900 font-bold text-xs transition"
+              title="Decrease quantity"
+            >
+              -
+            </button>
+            <span className="w-6 text-center font-bold text-xs font-mono text-slate-900">
+              {item.quantity}
+            </span>
+            <button
+              onClick={() => onUpdateQuantity(item.id, 1)}
+              className="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:bg-white hover:text-slate-900 font-bold text-xs transition"
+              title="Increase quantity"
+            >
+              +
+            </button>
+          </div>
+
+          <div className="text-right w-16">
+            <span
+              className={`font-mono font-black text-sm ${
+                item.checked ? 'line-through text-slate-400' : 'text-slate-900'
+              }`}
+            >
+              ${lineTotal.toFixed(2)}
+            </span>
+          </div>
+
+          <button
+            onClick={() => onRemoveItem(item.id)}
+            className="text-slate-300 hover:text-rose-600 transition p-1"
+            title="Remove item"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {hasAlternative && item.betterAlternative && (
+        <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start space-x-2.5">
+            <div className="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 mt-0.5">
+              <Sparkles className="w-3.5 h-3.5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-1.5">
+                <span className="text-[11px] font-bold text-amber-900 uppercase tracking-wider">
+                  Cheaper Alternative Nearby!
+                </span>
+                <span className="px-1.5 py-0.2 rounded text-[10px] font-extrabold bg-amber-200/70 text-amber-900">
+                  Save {item.betterAlternative.savingsPercent}%
+                </span>
+              </div>
+              <p className="text-xs text-amber-950 font-medium mt-0.5">
+                Switch to <strong>{item.betterAlternative.cheaperDeal.storeName}</strong> ({item.betterAlternative.cheaperDeal.unitPrice}) and save{' '}
+                <strong className="text-emerald-800 font-bold">
+                  ${item.betterAlternative.totalPotentialSavings.toFixed(2)}
+                </strong>{' '}
+                on this purchase.
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => onSwapDeal(item.id, item.betterAlternative!.cheaperDeal)}
+            className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition flex items-center justify-center space-x-1.5 shrink-0 shadow-2xs"
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5" />
+            <span>Swap Deal</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

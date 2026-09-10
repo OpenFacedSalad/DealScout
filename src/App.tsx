@@ -1,562 +1,442 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { Header } from './components/Header';
-import { LocationModal } from './components/LocationModal';
-import { CircularsView } from './components/CircularsView';
-import { DealComparisonView } from './components/DealComparisonView';
-import { DealComparisonModal } from './components/DealComparisonModal';
-import { ShoppingListView } from './components/ShoppingListView';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  Store,
+  DealItem,
+  UserLocation,
+  RadiusOption,
+  ActiveTab,
+  ShoppingListItem,
+  ComparisonGroup,
+} from './types';
 import { groupSimilarDeals, findBetterAlternative } from './utils/dealMatcher';
-import { Store, DealItem, UserLocation, ShoppingListItem, ComparisonGroup } from './types';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { queueCartAction } from './utils/syncQueue';
+import Header from './components/Header';
+import LocationModal from './components/LocationModal';
+import CircularsView from './components/CircularsView';
+import DealComparisonView from './components/DealComparisonView';
+import DealComparisonModal from './components/DealComparisonModal';
+import ShoppingListView from './components/ShoppingListView';
+import DocViewerModal from './components/DocViewerModal';
+import InstallBanner from './components/InstallBanner';
+import FlyerUploadModal from './components/FlyerUploadModal';
 
-const SHOPPING_LIST_STORAGE_KEY = 'grocery_circulars_shopping_list_v2';
-const LOCATION_STORAGE_KEY = 'grocery_circulars_location_v2';
-const RADIUS_STORAGE_KEY = 'grocery_circulars_radius_v2';
+const STORAGE_KEY_LOCATION = 'grocery_circulars_location_v2';
+const STORAGE_KEY_RADIUS = 'grocery_circulars_radius_v2';
+const STORAGE_KEY_LIST = 'grocery_circulars_shopping_list_v2';
+
+const DEFAULT_LOCATION: UserLocation = {
+  latitude: 40.2137,
+  longitude: -77.0075,
+  city: 'Mechanicsburg',
+  state: 'PA',
+  zipCode: '17050',
+  formattedAddress: 'Mechanicsburg, PA 17050, USA',
+  isGps: false,
+  radiusMiles: 10,
+};
 
 export default function App() {
-  // Navigation
-  const [activeTab, setActiveTab] = useState<'circulars' | 'compare' | 'list'>('circulars');
-  
-  // Radius State (1, 5, 10, 25 miles)
-  const [radiusMiles, setRadiusMiles] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem(RADIUS_STORAGE_KEY);
-      if (saved) {
-        const val = parseInt(saved, 10);
-        if ([1, 5, 10, 25].includes(val)) return val;
-      }
-    } catch (e) {}
-    return 10;
-  });
-
-  // Location State
   const [location, setLocation] = useState<UserLocation>(() => {
     try {
-      const saved = localStorage.getItem(LOCATION_STORAGE_KEY);
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    return {
-      latitude: 40.2234,
-      longitude: -77.0016,
-      city: 'Mechanicsburg',
-      state: 'PA',
-      zipCode: '17050',
-      formattedAddress: 'Mechanicsburg, PA 17050',
-      isGps: false,
-      radiusMiles: 10,
-    };
+      const saved = localStorage.getItem(STORAGE_KEY_LOCATION);
+      return saved ? JSON.parse(saved) : DEFAULT_LOCATION;
+    } catch {
+      return DEFAULT_LOCATION;
+    }
   });
-  
-  const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
-  const [isLoadingLocation, setIsLoadingLocation] = useState(false);
-  const [locationError, setLocationError] = useState<string | null>(null);
 
-  // Circulars & Deals State
+  const [radiusMiles, setRadiusMiles] = useState<RadiusOption>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_RADIUS);
+      return saved ? (Number(saved) as RadiusOption) : 10;
+    } catch {
+      return 10;
+    }
+  });
+
+  const [rawShoppingList, setRawShoppingList] = useState<ShoppingListItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_LIST);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [activeTab, setActiveTab] = useState<ActiveTab>('circulars');
   const [stores, setStores] = useState<Store[]>([]);
   const [deals, setDeals] = useState<DealItem[]>([]);
-  const [selectedStoreId, setSelectedStoreId] = useState<string>('all');
-  const [isLoadingCirculars, setIsLoadingCirculars] = useState(false);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isGpsLocating, setIsGpsLocating] = useState<boolean>(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
-  // Comparison State
-  const [activeCompareGroup, setActiveCompareGroup] = useState<ComparisonGroup | null>(null);
+  const [isLocationModalOpen, setIsLocationModalOpen] = useState<boolean>(false);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
+  const [isDocModalOpen, setIsDocModalOpen] = useState<boolean>(false);
+  const [activeDocType, setActiveDocType] = useState<'design' | 'code'>('design');
+  const [selectedComparisonGroup, setSelectedComparisonGroup] = useState<ComparisonGroup | null>(null);
 
-  // Shopping List State
-  const [shoppingList, setShoppingList] = useState<ShoppingListItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(SHOPPING_LIST_STORAGE_KEY);
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    return [];
-  });
-
-  // Save shopping list to localStorage
   useEffect(() => {
-    try {
-      localStorage.setItem(SHOPPING_LIST_STORAGE_KEY, JSON.stringify(shoppingList));
-    } catch (e) {}
-  }, [shoppingList]);
-
-  // Save location to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify(location));
-    } catch (e) {}
+    localStorage.setItem(STORAGE_KEY_LOCATION, JSON.stringify(location));
   }, [location]);
 
-  // Save radius to localStorage
   useEffect(() => {
-    try {
-      localStorage.setItem(RADIUS_STORAGE_KEY, radiusMiles.toString());
-    } catch (e) {}
+    localStorage.setItem(STORAGE_KEY_RADIUS, radiusMiles.toString());
   }, [radiusMiles]);
 
-  // Fetch circulars for location & radius
-  const fetchCircularsForLocation = useCallback(async (loc: UserLocation, radius: number) => {
-    setIsLoadingCirculars(true);
-    try {
-      const res = await fetch('/api/circulars/nearby', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lat: loc.latitude,
-          lng: loc.longitude,
-          city: loc.city,
-          state: loc.state,
-          zipCode: loc.zipCode,
-          radiusMiles: radius,
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.stores && Array.isArray(data.stores) && data.deals && Array.isArray(data.deals)) {
-          setStores(data.stores);
-          setDeals(data.deals);
-        }
-      }
-    } catch (err) {
-      console.warn('Failed to fetch circulars:', err);
-    } finally {
-      setIsLoadingCirculars(false);
-    }
-  }, []);
-
-  // GPS Geolocation Handler
-  const handleDetectGps = useCallback(() => {
-    if (!navigator.geolocation) {
-      setLocationError('Geolocation is not supported by your browser.');
-      return;
-    }
-
-    setIsLoadingLocation(true);
-    setLocationError(null);
-
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const { latitude, longitude } = pos.coords;
-        try {
-          // Resolve location coordinates to city/state/zip via server
-          const res = await fetch('/api/location/resolve', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lat: latitude, lng: longitude }),
-          });
-
-          let city = 'Local Area';
-          let state = 'US';
-          let zipCode: string | undefined = undefined;
-          let formattedAddress = 'Your Current GPS Location';
-
-          if (res.ok) {
-            const data = await res.json();
-            if (data.city) city = data.city;
-            if (data.state) state = data.state;
-            if (data.zipCode) zipCode = data.zipCode;
-            if (data.formattedAddress) formattedAddress = data.formattedAddress;
-          }
-
-          const newLoc: UserLocation = {
-            latitude,
-            longitude,
-            city,
-            state,
-            zipCode,
-            formattedAddress,
-            isGps: true,
-            radiusMiles,
-          };
-
-          setLocation(newLoc);
-          fetchCircularsForLocation(newLoc, radiusMiles);
-        } catch (e) {
-          console.error('Geocode error:', e);
-          const fallbackLoc: UserLocation = {
-            latitude,
-            longitude,
-            city: 'Nearby Area',
-            state: 'US',
-            formattedAddress: 'Live GPS Location',
-            isGps: true,
-            radiusMiles,
-          };
-          setLocation(fallbackLoc);
-          fetchCircularsForLocation(fallbackLoc, radiusMiles);
-        } finally {
-          setIsLoadingLocation(false);
-        }
-      },
-      (error) => {
-        setIsLoadingLocation(false);
-        let msg = 'Unable to auto-detect GPS location. Please choose a city or ZIP code.';
-        if (error.code === error.PERMISSION_DENIED) {
-          msg = 'Location permission was denied. You can select your city or ZIP code manually.';
-        }
-        setLocationError(msg);
-      },
-      { timeout: 10000, enableHighAccuracy: true }
-    );
-  }, [fetchCircularsForLocation, radiusMiles]);
-
-  // Initial load: Attempt automatic GPS detection or load saved location
   useEffect(() => {
-    // Check if user previously had GPS or saved location
-    const saved = localStorage.getItem(LOCATION_STORAGE_KEY);
-    if (!saved && navigator.geolocation) {
-      // First visit: automatically try detecting user's physical GPS location
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const { latitude, longitude } = pos.coords;
-          fetch('/api/location/resolve', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lat: latitude, lng: longitude }),
-          })
-            .then((r) => r.json())
-            .then((data) => {
-              const detectedLoc: UserLocation = {
-                latitude,
-                longitude,
-                city: data.city || 'Local Area',
-                state: data.state || 'US',
-                zipCode: data.zipCode,
-                formattedAddress: data.formattedAddress || 'Live GPS Location',
-                isGps: true,
-                radiusMiles,
-              };
-              setLocation(detectedLoc);
-              fetchCircularsForLocation(detectedLoc, radiusMiles);
-            })
-            .catch(() => {
-              fetchCircularsForLocation(location, radiusMiles);
-            });
-        },
-        () => {
-          // If denied or timed out, load current location
-          fetchCircularsForLocation(location, radiusMiles);
-        },
-        { timeout: 4000 }
-      );
-    } else {
-      fetchCircularsForLocation(location, radiusMiles);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    localStorage.setItem(STORAGE_KEY_LIST, JSON.stringify(rawShoppingList));
+  }, [rawShoppingList]);
 
-  // Handle radius change
-  const handleChangeRadius = (newRadius: number) => {
-    setRadiusMiles(newRadius);
-    const updatedLoc = { ...location, radiusMiles: newRadius };
-    setLocation(updatedLoc);
-    fetchCircularsForLocation(updatedLoc, newRadius);
-  };
+  const fetchCirculars = useCallback(
+    async (targetLocation: UserLocation, targetRadius: number) => {
+      setIsLoading(true);
+      setFetchError(null);
 
-  // Handle location change
-  const handleSelectLocation = (newLoc: UserLocation) => {
-    const updatedLoc = { ...newLoc, radiusMiles };
-    setLocation(updatedLoc);
-    setLocationError(null);
-    setSelectedStoreId('all');
-    fetchCircularsForLocation(updatedLoc, radiusMiles);
-  };
+      try {
+        const response = await fetch('/api/circulars/nearby', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lat: targetLocation.latitude,
+            lng: targetLocation.longitude,
+            city: targetLocation.city,
+            state: targetLocation.state,
+            zipCode: targetLocation.zipCode,
+            radiusMiles: targetRadius,
+          }),
+        });
 
-  // Filter stores within radius
-  const storesWithinRadius = useMemo(() => {
-    return stores.filter((s) => s.distanceMiles <= radiusMiles);
-  }, [stores, radiusMiles]);
-
-  const activeStoreIds = useMemo(() => {
-    return new Set(storesWithinRadius.map((s) => s.id));
-  }, [storesWithinRadius]);
-
-  // Filter deals within active stores in radius
-  const dealsWithinRadius = useMemo(() => {
-    return deals.filter((d) => activeStoreIds.has(d.storeId));
-  }, [deals, activeStoreIds]);
-
-  // Group similar deals for comparison engine
-  const comparisonGroups = useMemo(() => {
-    return groupSimilarDeals(dealsWithinRadius);
-  }, [dealsWithinRadius]);
-
-  // Quick lookup maps
-  const similarDealsCounts = useMemo(() => {
-    const map = new Map<string, number>();
-    comparisonGroups.forEach((g) => {
-      map.set(g.productGroup, g.dealCount);
-    });
-    return map;
-  }, [comparisonGroups]);
-
-  const bestDealIds = useMemo(() => {
-    const set = new Set<string>();
-    comparisonGroups.forEach((g) => {
-      if (g.dealCount > 1) {
-        set.add(g.bestDealId);
-      }
-    });
-    return set;
-  }, [comparisonGroups]);
-
-  // Update shopping list items with better alternative alerts
-  const enrichedShoppingList = useMemo(() => {
-    return shoppingList.map((item) => {
-      const better = findBetterAlternative(item, dealsWithinRadius);
-      return {
-        ...item,
-        betterAlternative: better,
-      };
-    });
-  }, [shoppingList, dealsWithinRadius]);
-
-  // Shopping List Handlers
-  const isDealInList = (dealId: string) => {
-    return shoppingList.some((item) => item.dealId === dealId);
-  };
-
-  const handleToggleShoppingList = (deal: DealItem) => {
-    setShoppingList((prev) => {
-      const existing = prev.find((i) => i.dealId === deal.id);
-      if (existing) {
-        return prev.filter((i) => i.dealId !== deal.id);
-      } else {
-        const newItem: ShoppingListItem = {
-          id: `item-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-          dealId: deal.id,
-          dealItem: deal,
-          storeId: deal.storeId,
-          storeName: deal.storeName,
-          storeLogoBg: deal.storeLogoBg,
-          storeLogoText: deal.storeLogoText,
-          price: deal.salePrice,
-          originalPrice: deal.originalPrice,
-          quantity: 1,
-          unitPrice: deal.unitPrice,
-          category: deal.category,
-          checked: false,
-          addedAt: Date.now(),
-        };
-        return [newItem, ...prev];
-      }
-    });
-  };
-
-  const handleAddDealToList = (deal: DealItem) => {
-    if (!isDealInList(deal.id)) {
-      handleToggleShoppingList(deal);
-    }
-  };
-
-  const handleAddCustomItem = (title: string, storeName = 'Local Store') => {
-    const newItem: ShoppingListItem = {
-      id: `custom-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      customTitle: title,
-      storeId: 'store-custom',
-      storeName: storeName,
-      storeLogoBg: 'bg-stone-200',
-      storeLogoText: 'ITEM',
-      price: 0,
-      originalPrice: 0,
-      quantity: 1,
-      category: 'other',
-      checked: false,
-      addedAt: Date.now(),
-    };
-    setShoppingList((prev) => [newItem, ...prev]);
-  };
-
-  const handleToggleItem = (id: string) => {
-    setShoppingList((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, checked: !i.checked } : i))
-    );
-  };
-
-  const handleRemoveItem = (id: string) => {
-    setShoppingList((prev) => prev.filter((i) => i.id !== id));
-  };
-
-  const handleUpdateQuantity = (id: string, delta: number) => {
-    setShoppingList((prev) =>
-      prev
-        .map((i) => {
-          if (i.id === id) {
-            const nextQty = Math.max(1, i.quantity + delta);
-            return { ...i, quantity: nextQty };
-          }
-          return i;
-        })
-        .filter((i) => i.quantity > 0)
-    );
-  };
-
-  const handleSwapBetterDeal = (itemId: string, newDealId: string) => {
-    const newDeal = deals.find((d) => d.id === newDealId);
-    if (!newDeal) return;
-
-    setShoppingList((prev) =>
-      prev.map((i) => {
-        if (i.id === itemId) {
-          return {
-            ...i,
-            dealId: newDeal.id,
-            dealItem: newDeal,
-            storeId: newDeal.storeId,
-            storeName: newDeal.storeName,
-            storeLogoBg: newDeal.storeLogoBg,
-            storeLogoText: newDeal.storeLogoText,
-            price: newDeal.salePrice,
-            originalPrice: newDeal.originalPrice,
-            unitPrice: newDeal.unitPrice,
-            category: newDeal.category,
-          };
+        if (!response.ok) {
+          throw new Error(`Failed to fetch flyers (HTTP ${response.status})`);
         }
-        return i;
-      })
-    );
-  };
 
-  const handleClearCompleted = () => {
-    setShoppingList((prev) => prev.filter((i) => !i.checked));
-  };
-
-  // Compare item trigger
-  const handleCompareSimilar = (deal: DealItem) => {
-    const group = comparisonGroups.find((g) => g.productGroup === deal.genericProductGroup);
-    if (group) {
-      setActiveCompareGroup(group);
-    } else {
-      // Fallback single comparison group
-      setActiveCompareGroup({
-        productGroup: deal.genericProductGroup || deal.id,
-        displayName: deal.title,
-        category: deal.category,
-        dealCount: 1,
-        lowestPrice: deal.salePrice,
-        lowestUnitPrice: deal.unitPrice,
-        bestDealId: deal.id,
-        bestStoreName: deal.storeName,
-        deals: [deal],
-      });
-    }
-  };
-
-  // Metrics
-  const totalCartSavings = shoppingList.reduce(
-    (sum, item) => sum + (item.checked ? 0 : Math.max(0, (item.originalPrice || item.price) - item.price) * item.quantity),
-    0
+        const data = await response.json();
+        setStores(data.stores || []);
+        setDeals(data.deals || []);
+      } catch (err: any) {
+        console.error('[App] Error loading circulars:', err);
+        setFetchError(err.message || 'Failed to load local grocery circulars.');
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    []
   );
 
+  useEffect(() => {
+    fetchCirculars(location, radiusMiles);
+  }, [location, radiusMiles, fetchCirculars]);
+
+  const handleDetectGPS = useCallback(async () => {
+    try {
+      if (!navigator.geolocation) {
+        alert('Geolocation is not supported by your browser.');
+        return;
+      }
+
+      setIsGpsLocating(true);
+
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          try {
+            const lat = position.coords.latitude;
+            const lng = position.coords.longitude;
+
+            const res = await fetch('/api/location/resolve', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ lat, lng }),
+            });
+
+            if (!res.ok) throw new Error('Failed to resolve coordinates');
+
+            const data = await res.json();
+            const newLoc: UserLocation = {
+              latitude: data.latitude,
+              longitude: data.longitude,
+              city: data.city,
+              state: data.state,
+              zipCode: data.zipCode,
+              formattedAddress: data.formattedAddress,
+              isGps: true,
+              radiusMiles,
+            };
+
+            setLocation(newLoc);
+          } catch (err) {
+            console.error('[App] GPS resolve error:', err);
+            alert('Could not resolve physical address from GPS coordinates.');
+          } finally {
+            setIsGpsLocating(false);
+          }
+        },
+        (error) => {
+          setIsGpsLocating(false);
+          console.warn('[App] GPS Permission error:', error.message);
+          alert('Location access was denied or timed out. Please enter your ZIP code manually.');
+        },
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 }
+      );
+    } catch (err) {
+      setIsGpsLocating(false);
+      console.warn('[App] GPS Geolocation restricted in this environment:', err);
+    }
+  }, [radiusMiles]);
+
+  const comparisonGroups = useMemo(() => {
+    return groupSimilarDeals(deals);
+  }, [deals]);
+
+  const shoppingList = useMemo(() => {
+    return rawShoppingList.map((item) => {
+      const betterAlternative = findBetterAlternative(item, deals);
+      return {
+        ...item,
+        betterAlternative,
+      };
+    });
+  }, [rawShoppingList, deals]);
+
+  const totalListSavings = useMemo(() => {
+    return shoppingList.reduce((acc, item) => {
+      if (item.betterAlternative) {
+        return acc + item.betterAlternative.totalPotentialSavings;
+      }
+      return acc;
+    }, 0);
+  }, [shoppingList]);
+
+  const handleDealsImported = useCallback((importedDeals: DealItem[], storeId: string) => {
+    setDeals((prev) => {
+      const remaining = prev.filter((d) => d.storeId !== storeId);
+      return [...importedDeals, ...remaining];
+    });
+
+    setStores((prev) =>
+      prev.map((s) => (s.id === storeId ? { ...s, totalDealsCount: importedDeals.length } : s))
+    );
+  }, []);
+
+  const handleToggleDealInList = useCallback((deal: DealItem) => {
+    setRawShoppingList((prev) => {
+      const existing = prev.find((item) => item.deal?.id === deal.id);
+      if (existing) {
+        queueCartAction('REMOVE', { id: existing.id });
+        return prev.filter((item) => item.id !== existing.id);
+      }
+      const newItem: ShoppingListItem = {
+        id: `cart-${deal.id}-${Date.now()}`,
+        title: deal.title,
+        quantity: 1,
+        checked: false,
+        deal,
+        createdAt: new Date().toISOString(),
+      };
+      queueCartAction('UPDATE_QTY', { id: newItem.id, item: newItem });
+      return [newItem, ...prev];
+    });
+  }, []);
+
+  const handleAddCustomItem = useCallback((title: string) => {
+    if (!title.trim()) return;
+    const newItem: ShoppingListItem = {
+      id: `custom-${Date.now()}`,
+      title: title.trim(),
+      quantity: 1,
+      checked: false,
+      createdAt: new Date().toISOString(),
+    };
+    queueCartAction('UPDATE_QTY', { id: newItem.id, item: newItem });
+    setRawShoppingList((prev) => [newItem, ...prev]);
+  }, []);
+
+  const handleRemoveListItem = useCallback((id: string) => {
+    queueCartAction('REMOVE', { id });
+    setRawShoppingList((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+
+  const handleToggleListItemChecked = useCallback((id: string) => {
+    queueCartAction('TOGGLE', { id });
+    setRawShoppingList((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, checked: !item.checked } : item))
+    );
+  }, []);
+
+  const handleUpdateListItemQuantity = useCallback((id: string, delta: number) => {
+    queueCartAction('UPDATE_QTY', { id, delta });
+    setRawShoppingList((prev) =>
+      prev
+        .map((item) => {
+          if (item.id === id) {
+            const nextQty = item.quantity + delta;
+            return nextQty > 0 ? { ...item, quantity: nextQty } : null;
+          }
+          return item;
+        })
+        .filter(Boolean) as ShoppingListItem[]
+    );
+  }, []);
+
+  const handleSwapItemWithAlternative = useCallback(
+    (itemId: string, cheaperDeal: DealItem) => {
+      queueCartAction('UPDATE_QTY', { id: itemId, dealId: cheaperDeal.id });
+      setRawShoppingList((prev) =>
+        prev.map((item) => {
+          if (item.id === itemId) {
+            return {
+              ...item,
+              title: cheaperDeal.title,
+              deal: cheaperDeal,
+              betterAlternative: null,
+            };
+          }
+          return item;
+        })
+      );
+    },
+    []
+  );
+
+  const handleOpenDocModal = (type: 'design' | 'code') => {
+    setActiveDocType(type);
+    setIsDocModalOpen(true);
+  };
+
   return (
-    <div className="min-h-screen bg-stone-100/70 text-stone-900 font-sans antialiased selection:bg-emerald-200 selection:text-emerald-950 pb-16">
-      
-      {/* Top Header */}
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased">
       <Header
-        location={location}
-        isLoadingLocation={isLoadingLocation}
-        onOpenLocationModal={() => setIsLocationModalOpen(true)}
-        onDetectGps={handleDetectGps}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        shoppingListCount={shoppingList.length}
-        totalSavings={totalCartSavings}
-        comparisonCount={comparisonGroups.filter((g) => g.dealCount > 1).length}
+        location={location}
         radiusMiles={radiusMiles}
-        onChangeRadius={handleChangeRadius}
+        setRadiusMiles={setRadiusMiles}
+        onOpenLocationModal={() => setIsLocationModalOpen(true)}
+        onOpenUploadModal={() => setIsUploadModalOpen(true)}
+        onDetectGPS={handleDetectGPS}
+        isGpsLocating={isGpsLocating}
+        comparisonCount={comparisonGroups.filter((g) => g.totalStores > 1).length}
+        shoppingListCount={shoppingList.length}
+        totalSavings={totalListSavings}
+        onOpenDocViewer={handleOpenDocModal}
       />
 
-      {/* Main Container */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
-        
-        {/* Loading Indicator */}
-        {isLoadingCirculars && (
-          <div className="mb-6 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between text-emerald-900 animate-pulse">
-            <div className="flex items-center gap-2.5">
-              <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
-              <span className="text-sm font-bold">
-                Scanning active weekly grocery flyers for {location.city}, {location.state} within {radiusMiles} miles...
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* Location Error Notice */}
-        {locationError && (
-          <div className="mb-6 p-4 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-between text-amber-900">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0" />
-              <span className="text-sm">{locationError}</span>
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {fetchError && (
+          <div className="mb-6 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 flex items-center justify-between">
+            <div>
+              <p className="font-semibold text-sm">Unable to load grocery circulars</p>
+              <p className="text-xs text-red-600 mt-0.5">{fetchError}</p>
             </div>
             <button
-              onClick={() => setIsLocationModalOpen(true)}
-              className="text-xs font-bold text-amber-800 underline hover:no-underline ml-3 cursor-pointer"
+              onClick={() => fetchCirculars(location, radiusMiles)}
+              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg shadow-sm transition"
             >
-              Choose City / ZIP
+              Retry Search
             </button>
           </div>
         )}
 
-        {/* View Routing */}
-        {activeTab === 'circulars' && (
-          <CircularsView
-            stores={storesWithinRadius}
-            deals={dealsWithinRadius}
-            selectedStoreId={selectedStoreId}
-            onSelectStore={setSelectedStoreId}
-            onToggleShoppingList={handleToggleShoppingList}
-            isDealInList={isDealInList}
-            onCompareSimilar={handleCompareSimilar}
-            similarDealsCounts={similarDealsCounts}
-            bestDealIds={bestDealIds}
-            radiusMiles={radiusMiles}
-            onChangeRadius={handleChangeRadius}
-            location={location}
-            isLoadingCirculars={isLoadingCirculars}
-          />
-        )}
+        {isLoading ? (
+          <div className="flex flex-col items-center justify-center py-24 space-y-4">
+            <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+            <div className="text-center">
+              <p className="text-sm font-semibold text-slate-800">
+                Searching live weekly circular flyers near {location.city}...
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Gemini 3.7 Flash Grounding live web ad prices & normalizing package unit costs
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            {activeTab === 'circulars' && (
+              <CircularsView
+                stores={stores}
+                deals={deals}
+                location={location}
+                radiusMiles={radiusMiles}
+                shoppingList={rawShoppingList}
+                onToggleList={handleToggleDealInList}
+                onOpenComparison={(groupKey) => {
+                  const grp = comparisonGroups.find((g) => g.genericProductGroup === groupKey);
+                  if (grp) setSelectedComparisonGroup(grp);
+                }}
+              />
+            )}
 
-        {activeTab === 'compare' && (
-          <DealComparisonView
-            comparisonGroups={comparisonGroups}
-            onOpenCompareModal={(group) => setActiveCompareGroup(group)}
-            onAddDealToList={handleAddDealToList}
-            isDealInList={isDealInList}
-          />
-        )}
+            {activeTab === 'compare' && (
+              <DealComparisonView
+                groups={comparisonGroups}
+                stores={stores}
+                shoppingList={rawShoppingList}
+                onToggleList={handleToggleDealInList}
+                onOpenDetailModal={(group) => setSelectedComparisonGroup(group)}
+              />
+            )}
 
-        {activeTab === 'list' && (
-          <ShoppingListView
-            items={enrichedShoppingList}
-            onToggleItem={handleToggleItem}
-            onRemoveItem={handleRemoveItem}
-            onUpdateQuantity={handleUpdateQuantity}
-            onAddCustomItem={handleAddCustomItem}
-            onSwapBetterDeal={handleSwapBetterDeal}
-            allDeals={dealsWithinRadius}
-            onClearCompleted={handleClearCompleted}
-          />
+            {activeTab === 'list' && (
+              <ShoppingListView
+                items={shoppingList}
+                onRemoveItem={handleRemoveListItem}
+                onToggleChecked={handleToggleListItemChecked}
+                onUpdateQuantity={handleUpdateListItemQuantity}
+                onAddCustomItem={handleAddCustomItem}
+                onSwapDeal={handleSwapItemWithAlternative}
+              />
+            )}
+          </>
         )}
-
       </main>
 
-      {/* Location Modal */}
-      <LocationModal
-        isOpen={isLocationModalOpen}
-        onClose={() => setIsLocationModalOpen(false)}
-        currentLocation={location}
-        onSelectLocation={handleSelectLocation}
-        onDetectGps={handleDetectGps}
-        isLoadingLocation={isLoadingLocation}
-        radiusMiles={radiusMiles}
-        onChangeRadius={handleChangeRadius}
-      />
+      <InstallBanner />
 
-      {/* Deal Comparison Modal */}
-      <DealComparisonModal
-        group={activeCompareGroup}
-        onClose={() => setActiveCompareGroup(null)}
-        onAddDealToList={handleAddDealToList}
-        isDealInList={isDealInList}
-      />
+      {isLocationModalOpen && (
+        <LocationModal
+          isOpen={isLocationModalOpen}
+          currentLocation={location}
+          currentRadius={radiusMiles}
+          onClose={() => setIsLocationModalOpen(false)}
+          onSave={(newLoc, newRadius) => {
+            setLocation(newLoc);
+            setRadiusMiles(newRadius);
+            setIsLocationModalOpen(false);
+          }}
+          onDetectGPS={() => {
+            setIsLocationModalOpen(false);
+            handleDetectGPS();
+          }}
+          isGpsLocating={isGpsLocating}
+        />
+      )}
 
+      {isUploadModalOpen && (
+        <FlyerUploadModal
+          isOpen={isUploadModalOpen}
+          onClose={() => setIsUploadModalOpen(false)}
+          stores={stores}
+          onDealsImported={handleDealsImported}
+        />
+      )}
+
+      {selectedComparisonGroup && (
+        <DealComparisonModal
+          group={selectedComparisonGroup}
+          isOpen={Boolean(selectedComparisonGroup)}
+          onClose={() => setSelectedComparisonGroup(null)}
+          shoppingList={rawShoppingList}
+          onToggleList={handleToggleDealInList}
+        />
+      )}
+
+      {isDocModalOpen && (
+        <DocViewerModal
+          isOpen={isDocModalOpen}
+          initialDoc={activeDocType}
+          onClose={() => setIsDocModalOpen(false)}
+        />
+      )}
     </div>
   );
 }

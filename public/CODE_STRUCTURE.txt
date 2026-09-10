@@ -1,0 +1,215 @@
+================================================================================
+DEALSCOUT - CODE STRUCTURE & IMPLEMENTATION GUIDE
+Project: DealScout
+Version: 2.0.0
+Date: September 2026
+Format: Plain Text Reference for Gemini & Developers
+================================================================================
+
+1. COMPLETE FILE TREE
+--------------------------------------------------------------------------------
+DealScout/
+├── .env.example                      # Template for required environment variables (GEMINI_API_KEY)
+├── index.html                        # HTML5 entry point, SEO meta tags, title (<title>DealScout</title>)
+├── metadata.json                     # AI Studio metadata (app name, capabilities, frame permissions)
+├── package.json                      # Dependencies, scripts (dev, build, start, lint)
+├── tsconfig.json                     # TypeScript strict configuration
+├── vite.config.ts                    # Vite build configuration with Tailwind CSS plugin
+├── server.ts                         # Main Express backend server & API gateway
+├── server/
+│   ├── geminiService.ts              # Gemini 3.7 Flash AI client, circular generator, deal comparator
+│   └── storeFinder.ts                # Real OSM Overpass POI finder, Nominatim geocoder, Haversine math
+├── public/
+│   ├── DESIGN_DOCUMENT.txt           # Complete system design document
+│   └── CODE_STRUCTURE.txt            # This code structure guide
+└── src/
+    ├── main.tsx                      # React root rendering entry point
+    ├── App.tsx                       # Master application component, state orchestrator, tab router
+    ├── index.css                     # Global styles (@import "tailwindcss";)
+    ├── types.ts                      # Shared TypeScript types, interfaces, enums
+    ├── components/
+    │   ├── Header.tsx                # App navigation, brand, live GPS trigger, radius & location pill, tabs
+    │   ├── LocationModal.tsx         # Modal for setting ZIP code, manual city search, radius & GPS
+    │   ├── CircularsView.tsx         # Main flyer browsing view, store tabs, category filters, deal search
+    │   ├── DealCard.tsx              # Single deal card with pricing, unit cost, badges, list toggle
+    │   ├── DealComparisonView.tsx    # Cross-store deal comparison dashboard grouped by product group
+    │   ├── DealComparisonModal.tsx   # Detailed modal with AI verdict, key difference & caveats
+    │   └── ShoppingListView.tsx      # Interactive shopping list, cross-store savings alerts, 1-click swap
+    ├── utils/
+    │   └── dealMatcher.ts            # Comparison grouping logic and "Find Better Alternative" algorithm
+    └── data/
+        └── sampleCirculars.ts        # Built-in regional presets (Central PA / 17050, Austin, etc.)
+
+
+2. DETAILED FILE-BY-FILE SPECIFICATION
+--------------------------------------------------------------------------------
+
+2.1 BACKEND SERVER LAYER
+
+[server.ts]
+- Purpose: HTTP server listening on port 3000 (0.0.0.0) serving both API routes and Vite/static frontend.
+- Key Endpoints:
+  * GET  /api/health
+    Returns server status and timestamp.
+  * POST /api/location/resolve
+    Accepts { lat, lng, query }. Resolves coords or ZIP/city into { latitude, longitude, city, state, zipCode, formattedAddress }.
+  * POST /api/location/geocode
+    Accepts { lat, lng }. Reverse geocodes coords into { city, state, zipCode }.
+  * POST /api/circulars/nearby
+    Accepts { lat, lng, city, state, zipCode, radiusMiles }. Queries physical grocery stores within radius and generates/returns authentic weekly circular flyer deals for each store.
+  * POST /api/compare/deals
+    Accepts { productGroupName, deals }. Invokes Gemini 3.7 Flash AI to analyze competing deals and return bestDealId, verdict, keyDifference, unitPriceAdvantage, caveats.
+  * GET  /DESIGN_DOCUMENT.txt & /CODE_STRUCTURE.txt
+    Direct raw text file streaming for developers and AI assistants.
+
+[server/storeFinder.ts]
+- Purpose: Spatial analysis, geocoding, and physical supermarket location detection.
+- Core Functions:
+  * calculateDistanceInMiles(lat1, lon1, lat2, lon2):
+    Implements Haversine spherical trigonometric formula to return precise miles.
+  * geocodeQuery(query: string):
+    Queries Nominatim OpenStreetMap API with instant cached resolution for popular ZIP codes (e.g. 17050 Mechanicsburg, PA).
+  * reverseGeocodeCoords(lat: number, lng: number):
+    Translates device GPS coordinates into clean City, State, and ZIP.
+  * findPhysicalGroceryStoresOSM(lat: number, lng: number, radiusMiles: number):
+    Queries OpenStreetMap Overpass API for real POIs tagged `shop=supermarket` or `shop=grocery` within radius meters.
+    Includes built-in verified POIs for the 17050 / Mechanicsburg / Cumberland County, PA market (Karns Quality Foods, Giant Food Stores, Weis Markets, ALDI, Wegmans, Target Grocery, Trader Joe's).
+  * getRegionalDefaultStores(city, state, lat, lng, radiusMiles):
+    Provides authentic regional chains for PA, TX, FL, and national regions if OSM is unreachable.
+
+[server/geminiService.ts]
+- Purpose: AI orchestration with `@google/genai` (Google Gen AI SDK) using Gemini 3.7 Flash.
+- Core Functions:
+  * getAiClient():
+    Initializes lazy singleton GoogleGenAI client with process.env.GEMINI_API_KEY.
+  * getCircularsForLocation(lat, lng, city, state, zipCode, radiusMiles):
+    Orchestrates physical store discovery, then requests Gemini 3.7 Flash to construct weekly flyer deals matching store identity (e.g. Karns butcher specials, Giant Choice Rewards, ALDI Super 6).
+    Employs structured JSON schema enforcement (`responseSchema`). Includes robust deterministic fallback templates if AI is rate-limited.
+  * compareDealsWithAI(productGroupName, deals):
+    Analyzes competing store deals for a specific product group. Produces a structured JSON verdict explaining which deal is mathematically and qualitatively superior, along with caveats.
+
+
+2.2 TYPES & UTILITIES
+
+[src/types.ts]
+- Core TypeScript interfaces:
+  * DealCategory: 'produce' | 'meat_seafood' | 'dairy_eggs' | 'bakery_deli' | 'pantry_snacks' | 'frozen' | 'beverages' | 'household'
+  * DealType: 'sale' | 'bogo' | 'digital_coupon' | 'multi_buy' | 'clearance'
+  * Store: Represents a physical supermarket with address, distance, operating hours, logo styling.
+  * DealItem: Represents an individual flyer deal with prices, normalized unit economics, brand, tags, qualityTier.
+  * ComparisonGroup: Collection of competing deals in the same genericProductGroup with lowestPrice and AI analysis.
+  * ShoppingListItem: Item saved in cart with quantity, checked state, custom title, and optional betterAlternative alert.
+  * UserLocation: Geolocation coordinates, city, state, zip, formatted address, isGps flag, radiusMiles.
+
+[src/utils/dealMatcher.ts]
+- Core Functions:
+  * groupSimilarDeals(deals: DealItem[]): ComparisonGroup[]:
+    Groups all deals across multiple stores by `deal.genericProductGroup` (e.g. "ground_beef_80_20", "whole_milk").
+    Sorts deals within each group by `normalizedUnitCost` ascending so index 0 is always the best price per unit.
+    Sorts comparison groups by number of competing deals descending.
+  * findBetterAlternative(item: ShoppingListItem, allDeals: DealItem[]):
+    Scans all deals in active stores within radius. If an alternative deal exists in the same genericProductGroup from a different store with a lower `normalizedUnitCost`, calculates savings and returns a recommendation object.
+
+
+2.3 FRONTEND UI COMPONENTS
+
+[src/App.tsx]
+- Purpose: Root controller managing top-level application state:
+  * `location`: UserLocation (persisted to LocalStorage 'grocery_circulars_location_v2')
+  * `radiusMiles`: 1, 5, 10, or 25 miles (persisted to 'grocery_circulars_radius_v2')
+  * `shoppingList`: ShoppingListItem[] (persisted to 'grocery_circulars_shopping_list_v2')
+  * `stores` & `deals`: Loaded asynchronously via `/api/circulars/nearby`
+  * `activeTab`: 'circulars' | 'compare' | 'list'
+- Manages GPS detection on startup and user-triggered re-detection.
+- Automatically calculates enriched shopping list items with cross-store deal savings alerts.
+
+[src/components/Header.tsx]
+- Top sticky navigation bar:
+  * Brand logo and "DealScout" title
+  * Quick radius selector pill (1mi, 5mi, 10mi, 25mi)
+  * Location display button (opens LocationModal)
+  * Live GPS trigger button with loader spinner
+  * Tab navigation buttons (Circulars, Compare with count badge, List with items count & total savings badge)
+
+[src/components/CircularsView.tsx]
+- Main digital circular viewing hub:
+  * Location & store summary banner (shows count of stores within chosen radius)
+  * Store tabs carousel ("All Stores" + individual store badges with exact distances)
+  * Active store promotional flyer header (valid dates, operating hours, address)
+  * Search bar (matches item title, store name, tags)
+  * Sort dropdown (Highest % Discount, Lowest Price, Lowest Unit Cost)
+  * Category filter chips (Produce, Meat/Seafood, Dairy/Eggs, Bakery, etc.)
+  * Promo filter chips (BOGO, Digital Coupons, 35%+ Off, Organic)
+  * Responsive grid rendering `DealCard` components
+
+[src/components/DealCard.tsx]
+- High-craft product card:
+  * Store logo badge with brand colors (e.g. KARNS in red, WEIS in blue, ALDI in navy)
+  * Sale price and struck-through regular price with discount percentage badge
+  * Prominent normalized unit price display (e.g. "$1.49 / lb" or "$0.14 / egg")
+  * Deal type badges ("BUY 1 GET 1 FREE", "DIGITAL COUPON", "SUPER 6")
+  * "Best Local Price" green banner if it is the lowest unit price across all nearby stores
+  * "Compare [N] Stores" button if competing deals exist
+  * 1-click "Add to Shopping List" / "In List" toggle button
+
+[src/components/DealComparisonView.tsx]
+- Side-by-side comparison screen:
+  * Displays comparison cards grouped by product commodity
+  * Highlights the winning store and unit price advantage
+  * Displays competing runner-up stores with price differences
+
+[src/components/DealComparisonModal.tsx]
+- Deep AI comparison modal:
+  * Calls `/api/compare/deals` when opened to fetch Gemini 3.7 Flash analysis
+  * Renders "AI Shopping Verdict", "Key Difference", "Unit Price Advantage", and "Restrictions & Caveats"
+  * Side-by-side cards of all competing store deals with 1-click "Add to List" buttons
+
+[src/components/ShoppingListView.tsx]
+- Interactive digital shopping list:
+  * Multi-store shopping list organized with checkboxes and quantity +/- counters
+  * Custom item entry field for non-circular items
+  * "Better Alternative Found" amber alert cards:
+    If a user has an item in their cart and a competitor has a lower unit price,
+    it shows: "Save $X.XX by buying at [StoreName] ($Y.YY/unit)" with a 1-click "Swap Deal" button.
+  * Real-time estimated total cost and total weekly savings counter.
+
+[src/components/LocationModal.tsx]
+- Modal dialog for setting user geographic position:
+  * Radius selector (1, 5, 10, 25 miles)
+  * "Use My Current Live GPS Location" button
+  * Manual ZIP code or City/State input with geocoding
+  * Quick-select presets for major metro regions
+
+
+3. END-TO-END DATA FLOW
+--------------------------------------------------------------------------------
+1. App Startup:
+   App.tsx checks `localStorage`. If no saved location, prompts `navigator.geolocation`.
+   Coordinates are sent to `/api/location/resolve` -> resolved to city/state/zip.
+
+2. Circulars Fetching:
+   `fetchCircularsForLocation(location, radiusMiles)` issues POST to `/api/circulars/nearby`.
+   Backend executes OSM Overpass POI query filtered by `radiusMiles`.
+   Backend invokes Gemini 3.7 Flash to retrieve authentic weekly circular deals for each store.
+
+3. Price Comparison Engine:
+   Frontend `groupSimilarDeals()` aggregates all returned deals by `genericProductGroup`.
+   Finds lowest `normalizedUnitCost` store for each commodity.
+   When the user opens a comparison, `/api/compare/deals` triggers Gemini AI to generate a detailed shopper verdict.
+
+4. Shopping List & Cross-Store Swap:
+   When deals are added to the shopping list, `findBetterAlternative()` cross-references all active deals.
+   If a competitor within radius offers a cheaper unit price, an alert badge appears with a 1-click swap handler.
+
+
+4. ENVIRONMENT & RUNTIME INSTRUCTIONS
+--------------------------------------------------------------------------------
+- Environment Variables (.env):
+  GEMINI_API_KEY=your_gemini_api_key_here
+
+- Commands:
+  npm run dev     # Boots Express server with tsx and Vite middleware on port 3000
+  npm run build   # Builds Vite static bundle and esbuild compiles server to dist/server.cjs
+  npm run start   # Runs compiled production server via node dist/server.cjs
+  npm run lint    # Runs TypeScript typechecker (tsc --noEmit)
+================================================================================

@@ -1,371 +1,428 @@
-import React, { useState } from 'react';
-import { Search, Filter, Store as StoreIcon, Calendar, MapPin, Tag, Sparkles, Percent, ArrowUpDown, Clock, Compass, AlertCircle, Loader2 } from 'lucide-react';
-import { Store, DealItem, DealCategory, DealType, UserLocation } from '../types';
-import { DealCard } from './DealCard';
+import React, { useState, useMemo } from 'react';
+import {
+  Search,
+  Store as StoreIcon,
+  Clock,
+  MapPin,
+  Calendar,
+  Sparkles,
+  Percent,
+  SlidersHorizontal,
+  DollarSign,
+  Tag,
+  CheckCircle2,
+  X,
+} from 'lucide-react';
+import {
+  Store,
+  DealItem,
+  UserLocation,
+  RadiusOption,
+  ShoppingListItem,
+  DealCategory,
+  SortOption,
+} from '../types';
+import DealCard from './DealCard';
 
 interface CircularsViewProps {
   stores: Store[];
   deals: DealItem[];
-  selectedStoreId: string;
-  onSelectStore: (storeId: string) => void;
-  onToggleShoppingList: (deal: DealItem) => void;
-  isDealInList: (dealId: string) => boolean;
-  onCompareSimilar: (deal: DealItem) => void;
-  similarDealsCounts: Map<string, number>;
-  bestDealIds: Set<string>;
-  radiusMiles: number;
-  onChangeRadius: (radius: number) => void;
   location: UserLocation;
-  isLoadingCirculars: boolean;
+  radiusMiles: RadiusOption;
+  shoppingList: ShoppingListItem[];
+  onToggleList: (deal: DealItem) => void;
+  onOpenComparison: (genericProductGroup: string) => void;
 }
 
-export const CircularsView: React.FC<CircularsViewProps> = ({
+type PromoFilter = 'all' | 'bogo' | 'digital_coupon' | 'high_discount' | 'organic';
+
+const CATEGORIES: Array<{ id: 'all' | DealCategory; label: string }> = [
+  { id: 'all', label: 'All Items' },
+  { id: 'produce', label: 'Produce' },
+  { id: 'meat_seafood', label: 'Meat & Seafood' },
+  { id: 'dairy_eggs', label: 'Dairy & Eggs' },
+  { id: 'bakery_deli', label: 'Bakery & Deli' },
+  { id: 'pantry_snacks', label: 'Pantry & Snacks' },
+  { id: 'frozen', label: 'Frozen' },
+  { id: 'beverages', label: 'Beverages' },
+  { id: 'household', label: 'Household' },
+];
+
+export default function CircularsView({
   stores,
   deals,
-  selectedStoreId,
-  onSelectStore,
-  onToggleShoppingList,
-  isDealInList,
-  onCompareSimilar,
-  similarDealsCounts,
-  bestDealIds,
-  radiusMiles,
-  onChangeRadius,
   location,
-  isLoadingCirculars,
-}) => {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [selectedDealType, setSelectedDealType] = useState<string>('all');
-  const [sortBy, setSortBy] = useState<'discount' | 'price_asc' | 'unit_cost'>('discount');
+  radiusMiles,
+  shoppingList,
+  onToggleList,
+  onOpenComparison,
+}: CircularsViewProps) {
+  const [selectedStoreId, setSelectedStoreId] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<'all' | DealCategory>('all');
+  const [promoFilter, setPromoFilter] = useState<PromoFilter>('all');
+  const [sortBy, setSortBy] = useState<SortOption>('discount');
 
-  // Filter stores within the active radius
-  const storesWithinRadius = stores.filter((s) => s.distanceMiles <= radiusMiles);
+  const activeStore = useMemo(() => {
+    if (selectedStoreId === 'all') return null;
+    return stores.find((s) => s.id === selectedStoreId) || null;
+  }, [selectedStoreId, stores]);
 
-  // Selected store metadata
-  const currentStore = storesWithinRadius.find((s) => s.id === selectedStoreId) || null;
+  const groupStats = useMemo(() => {
+    const stats: Record<string, { minUnitCost: number; count: number }> = {};
+    for (const deal of deals) {
+      const group = deal.genericProductGroup;
+      if (!stats[group]) {
+        stats[group] = { minUnitCost: deal.normalizedUnitCost, count: 0 };
+      }
+      stats[group].count += 1;
+      if (deal.normalizedUnitCost < stats[group].minUnitCost) {
+        stats[group].minUnitCost = deal.normalizedUnitCost;
+      }
+    }
+    return stats;
+  }, [deals]);
 
-  // Filter deals by active stores, search, category, and promo type
-  const activeStoreIds = new Set(storesWithinRadius.map((s) => s.id));
-  
-  const filteredDeals = deals.filter((deal) => {
-    const isStoreInRadius = activeStoreIds.has(deal.storeId);
-    if (!isStoreInRadius) return false;
+  const listDealIds = useMemo(() => {
+    return new Set(
+      shoppingList
+        .filter((item) => Boolean(item.deal?.id))
+        .map((item) => item.deal!.id)
+    );
+  }, [shoppingList]);
 
-    const matchesStore = selectedStoreId === 'all' || deal.storeId === selectedStoreId;
-    const matchesCategory = selectedCategory === 'all' || deal.category === selectedCategory;
-    const matchesSearch =
-      deal.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      deal.storeName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (deal.subtitle && deal.subtitle.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      deal.tags?.some((t) => t.toLowerCase().includes(searchQuery.toLowerCase()));
+  const displayedDeals = useMemo(() => {
+    let result = deals.filter((deal) => {
+      if (selectedStoreId !== 'all' && deal.storeId !== selectedStoreId) {
+        return false;
+      }
+      if (selectedCategory !== 'all' && deal.category !== selectedCategory) {
+        return false;
+      }
+      if (promoFilter === 'bogo' && deal.dealType !== 'bogo') {
+        return false;
+      }
+      if (promoFilter === 'digital_coupon' && deal.dealType !== 'digital_coupon') {
+        return false;
+      }
+      if (promoFilter === 'high_discount' && deal.discountPercent < 35) {
+        return false;
+      }
+      if (promoFilter === 'organic' && deal.qualityTier !== 'organic' && !deal.tags.includes('organic')) {
+        return false;
+      }
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        const matchesTitle = deal.title.toLowerCase().includes(query);
+        const matchesStore = deal.storeName.toLowerCase().includes(query);
+        const matchesBrand = deal.brand ? deal.brand.toLowerCase().includes(query) : false;
+        const matchesTags = deal.tags.some((t) => t.toLowerCase().includes(query));
+        return matchesTitle || matchesStore || matchesBrand || matchesTags;
+      }
+      return true;
+    });
 
-    let matchesType = true;
-    if (selectedDealType === 'bogo') matchesType = deal.dealType === 'bogo';
-    else if (selectedDealType === 'digital_coupon') matchesType = deal.dealType === 'digital_coupon';
-    else if (selectedDealType === 'high_discount') matchesType = deal.discountPercent >= 35;
-    else if (selectedDealType === 'organic') matchesType = deal.qualityTier === 'organic' || deal.tags.includes('USDA Organic');
-
-    return matchesStore && matchesCategory && matchesSearch && matchesType;
-  });
-
-  // Sort deals
-  const sortedDeals = [...filteredDeals].sort((a, b) => {
-    if (sortBy === 'discount') return b.discountPercent - a.discountPercent;
-    if (sortBy === 'price_asc') return a.salePrice - b.salePrice;
-    if (sortBy === 'unit_cost') return a.normalizedUnitCost - b.normalizedUnitCost;
-    return 0;
-  });
-
-  const radiusChoices = [1, 5, 10, 25];
+    return result.sort((a, b) => {
+      if (sortBy === 'discount') {
+        return b.discountPercent - a.discountPercent;
+      }
+      if (sortBy === 'price') {
+        return a.salePrice - b.salePrice;
+      }
+      if (sortBy === 'unit_cost') {
+        return a.normalizedUnitCost - b.normalizedUnitCost;
+      }
+      return 0;
+    });
+  }, [deals, selectedStoreId, selectedCategory, promoFilter, searchQuery, sortBy]);
 
   return (
     <div className="space-y-6">
-      
-      {/* Location, Radius & Store Discovery Banner */}
-      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-stone-200 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3.5 border-b border-stone-100">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center text-emerald-700">
-              <MapPin className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-extrabold text-stone-900">
-                  {location.city}, {location.state} {location.zipCode ? `(${location.zipCode})` : ''}
-                </span>
-                <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                  {storesWithinRadius.length} {storesWithinRadius.length === 1 ? 'Store' : 'Stores'} within {radiusMiles}mi
-                </span>
-              </div>
-              <p className="text-xs text-stone-500">
-                Live circulars for local supermarkets near this geographic location
-              </p>
-            </div>
+      <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center space-x-2 text-xs font-bold text-emerald-700 uppercase tracking-wider">
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span>Active Weekly Circulars</span>
           </div>
+          <h1 className="text-xl sm:text-2xl font-black text-slate-900 mt-1 tracking-tight">
+            {stores.length} Supermarkets near {location.city}, {location.state}
+          </h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Aggregated within a <span className="font-semibold text-slate-700">{radiusMiles}-mile</span> radius. All prices normalized per unit.
+          </p>
+        </div>
 
-          {/* Quick Radius Selector Filter Bar */}
-          <div className="flex items-center gap-1.5 self-start sm:self-auto bg-stone-100 p-1 rounded-xl border border-stone-200 text-xs">
-            <span className="px-2 font-bold text-stone-500 flex items-center gap-1">
-              <Compass className="w-3.5 h-3.5 text-stone-400" />
-              Radius:
+        <div className="flex items-center gap-3">
+          <div className="bg-slate-50 px-3.5 py-2 rounded-xl border border-slate-100 text-right">
+            <span className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+              Total Deals
             </span>
-            {radiusChoices.map((r) => (
-              <button
-                key={r}
-                id={`radius-pill-${r}`}
-                onClick={() => onChangeRadius(r)}
-                className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer ${
-                  radiusMiles === r
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-stone-600 hover:text-stone-900 hover:bg-stone-200/60'
-                }`}
-              >
-                {r}mi
-              </button>
-            ))}
+            <span className="text-lg font-black text-slate-900 font-mono">
+              {deals.length}
+            </span>
+          </div>
+          <div className="bg-emerald-50 px-3.5 py-2 rounded-xl border border-emerald-100 text-right">
+            <span className="block text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">
+              Stores In Radius
+            </span>
+            <span className="text-lg font-black text-emerald-800 font-mono">
+              {stores.length}
+            </span>
           </div>
         </div>
-
-        {/* Store Tabs Strip */}
-        <div className="mt-3.5">
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-            <button
-              id="store-tab-all"
-              onClick={() => onSelectStore('all')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
-                selectedStoreId === 'all'
-                  ? 'bg-stone-900 text-white shadow-xs'
-                  : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
-              }`}
-            >
-              <StoreIcon className="w-3.5 h-3.5" />
-              <span>All Stores ({filteredDeals.length})</span>
-            </button>
-
-            {storesWithinRadius.map((store) => (
-              <button
-                key={store.id}
-                id={`store-tab-${store.id}`}
-                onClick={() => onSelectStore(store.id)}
-                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap flex items-center gap-2 cursor-pointer ${
-                  selectedStoreId === store.id
-                    ? 'bg-stone-900 text-white shadow-xs'
-                    : 'bg-stone-100 text-stone-700 hover:bg-stone-200 border border-stone-200/60'
-                }`}
-              >
-                <span className={`px-1.5 py-0.2 rounded text-[10px] font-black ${store.logoBg}`}>
-                  {store.logoText}
-                </span>
-                <span>{store.name}</span>
-                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
-                  selectedStoreId === store.id ? 'bg-stone-800 text-emerald-400' : 'bg-stone-200/70 text-stone-600'
-                }`}>
-                  {store.distanceMiles} mi
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* If no stores within very small radius */}
-        {storesWithinRadius.length === 0 && (
-          <div className="mt-3 p-3 bg-amber-50 rounded-xl border border-amber-200 flex items-center justify-between text-xs text-amber-800">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
-              <span>No grocery stores located within {radiusMiles} mile of this location.</span>
-            </div>
-            <button
-              onClick={() => onChangeRadius(10)}
-              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg cursor-pointer"
-            >
-              Expand to 10 miles
-            </button>
-          </div>
-        )}
       </div>
 
-      {/* Selected Store Flyer Banner */}
-      {currentStore && (
-        <div className="bg-gradient-to-r from-stone-900 to-stone-800 text-white rounded-3xl p-5 sm:p-7 shadow-md border border-stone-700">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2 flex-wrap mb-1">
-                <span className={`px-2.5 py-0.5 rounded text-xs font-black ${currentStore.logoBg}`}>
-                  {currentStore.logoText}
+      <div className="flex items-center space-x-2 overflow-x-auto pb-2 scrollbar-none">
+        <button
+          onClick={() => setSelectedStoreId('all')}
+          className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap transition shadow-2xs ${
+            selectedStoreId === 'all'
+              ? 'bg-slate-900 text-white'
+              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+          }`}
+        >
+          <StoreIcon className="w-3.5 h-3.5" />
+          <span>All Stores</span>
+          <span
+            className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+              selectedStoreId === 'all' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            {deals.length}
+          </span>
+        </button>
+
+        {stores.map((store) => (
+          <button
+            key={store.id}
+            onClick={() => setSelectedStoreId(store.id)}
+            className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap transition shadow-2xs border ${
+              selectedStoreId === store.id
+                ? 'bg-slate-900 text-white border-slate-900'
+                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            <span
+              className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider"
+              style={{
+                backgroundColor: store.logoBg,
+                color: store.logoText,
+              }}
+            >
+              {store.logoText}
+            </span>
+            <span>{store.name}</span>
+            <span className="text-[11px] font-normal text-slate-400">
+              {store.distanceMiles}mi
+            </span>
+            {store.totalDealsCount > 0 && (
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                  selectedStoreId === store.id
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {store.totalDealsCount}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {activeStore && (
+        <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white rounded-2xl p-5 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1.5">
+              <div className="flex items-center space-x-2">
+                <span
+                  className="px-2 py-0.5 rounded text-xs font-black uppercase tracking-wider"
+                  style={{ backgroundColor: activeStore.logoBg, color: activeStore.logoText }}
+                >
+                  {activeStore.logoText}
                 </span>
-                <span className="text-xs font-bold text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800/40">
-                  {currentStore.distanceMiles} miles from {location.city}, {location.state}
-                </span>
+                <h2 className="text-lg font-bold">{activeStore.flyerTitle}</h2>
               </div>
-              <h2 className="text-xl sm:text-2xl font-black text-white">
-                {currentStore.name} — {currentStore.flyerTitle}
-              </h2>
-              <div className="flex items-center gap-4 text-xs text-stone-300 mt-2 flex-wrap">
-                <span className="flex items-center gap-1">
-                  <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-                  {currentStore.validDates}
-                </span>
-                <span className="flex items-center gap-1">
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
+                <span className="flex items-center space-x-1">
                   <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-                  {currentStore.address}, {currentStore.city}, {currentStore.state}
+                  <span>{activeStore.address}, {activeStore.city} ({activeStore.distanceMiles} miles away)</span>
                 </span>
-                <span className="flex items-center gap-1">
+                <span className="flex items-center space-x-1">
                   <Clock className="w-3.5 h-3.5 text-emerald-400" />
-                  {currentStore.operatingHours}
+                  <span>{activeStore.operatingHours}</span>
+                </span>
+                <span className="flex items-center space-x-1">
+                  <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Valid: {activeStore.validDates}</span>
                 </span>
               </div>
             </div>
 
-            <div className="bg-stone-800/90 p-3.5 rounded-2xl border border-stone-700 text-center flex-shrink-0">
-              <span className="text-xs text-stone-400 block font-medium">Featured Specials</span>
-              <span className="text-sm font-bold text-white block mt-0.5">
-                {currentStore.featuredCategory}
+            <div className="sm:text-right border-t sm:border-t-0 sm:border-l border-slate-700 pt-3 sm:pt-0 sm:pl-5">
+              <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider block">
+                Store Speciality
               </span>
+              <p className="text-xs font-medium text-slate-200 mt-0.5">
+                {activeStore.featuredCategory}
+              </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* Filter and Search Controls */}
-      <div className="bg-white rounded-2xl p-4 border border-stone-200 shadow-xs space-y-3">
-        
-        {/* Search & Sort Row */}
-        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
-          <div className="relative w-full sm:w-80">
-            <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
+      <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
-              id="deals-search-input"
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search circular deals (e.g. Avocado, Steak, Milk, Eggs)..."
-              className="w-full pl-9 pr-4 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-2xs"
+              placeholder="Search circulars (e.g., ground beef, eggs, honeycrisp, organic)..."
+              className="w-full pl-10 pr-9 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
             />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
 
-          {/* Sort Selector */}
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-            <span className="text-xs font-bold text-stone-500 flex items-center gap-1">
-              <ArrowUpDown className="w-3.5 h-3.5" />
-              Sort:
-            </span>
+          <div className="flex items-center space-x-2 self-end sm:self-auto">
+            <SlidersHorizontal className="w-3.5 h-3.5 text-slate-400 hidden sm:inline" />
             <select
-              id="deals-sort-select"
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as any)}
-              className="px-3 py-1.5 bg-stone-50 border border-stone-200 rounded-xl text-xs font-bold text-stone-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+              onChange={(e) => setSortBy(e.target.value as SortOption)}
+              aria-label="Sort Deals By"
+              className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
             >
               <option value="discount">Highest % Discount</option>
-              <option value="price_asc">Lowest Price ($)</option>
-              <option value="unit_cost">Lowest Unit Cost ($/lb, $/oz)</option>
+              <option value="unit_cost">Lowest Unit Cost</option>
+              <option value="price">Lowest Package Price</option>
             </select>
           </div>
         </div>
 
-        {/* Category Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-          {[
-            { id: 'all', label: 'All Categories' },
-            { id: 'produce', label: 'Fresh Produce' },
-            { id: 'meat_seafood', label: 'Meat & Seafood' },
-            { id: 'dairy_eggs', label: 'Dairy & Eggs' },
-            { id: 'bakery_deli', label: 'Bakery & Deli' },
-            { id: 'pantry_snacks', label: 'Pantry & Snacks' },
-            { id: 'household', label: 'Household' },
-          ].map((cat) => (
+        <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 scrollbar-none text-xs">
+          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider pr-1">
+            Deals:
+          </span>
+          <button
+            onClick={() => setPromoFilter('all')}
+            className={`px-2.5 py-1 rounded-lg font-bold text-xs transition ${
+              promoFilter === 'all'
+                ? 'bg-emerald-100 text-emerald-800'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            All
+          </button>
+          <button
+            onClick={() => setPromoFilter('bogo')}
+            className={`px-2.5 py-1 rounded-lg font-bold text-xs transition ${
+              promoFilter === 'bogo'
+                ? 'bg-amber-100 text-amber-900'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            BOGO Deals
+          </button>
+          <button
+            onClick={() => setPromoFilter('digital_coupon')}
+            className={`px-2.5 py-1 rounded-lg font-bold text-xs transition ${
+              promoFilter === 'digital_coupon'
+                ? 'bg-blue-100 text-blue-800'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            Digital Coupons
+          </button>
+          <button
+            onClick={() => setPromoFilter('high_discount')}
+            className={`px-2.5 py-1 rounded-lg font-bold text-xs transition ${
+              promoFilter === 'high_discount'
+                ? 'bg-rose-100 text-rose-800'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            35%+ Off
+          </button>
+          <button
+            onClick={() => setPromoFilter('organic')}
+            className={`px-2.5 py-1 rounded-lg font-bold text-xs transition ${
+              promoFilter === 'organic'
+                ? 'bg-emerald-100 text-emerald-800'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            Organic
+          </button>
+        </div>
+
+        <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 scrollbar-none text-xs border-t border-slate-100 pt-2.5">
+          {CATEGORIES.map((cat) => (
             <button
               key={cat.id}
-              id={`cat-filter-${cat.id}`}
               onClick={() => setSelectedCategory(cat.id)}
-              className={`px-3 py-1.5 rounded-lg font-bold transition whitespace-nowrap cursor-pointer ${
+              className={`px-3 py-1.5 rounded-xl font-semibold text-xs whitespace-nowrap transition ${
                 selectedCategory === cat.id
-                  ? 'bg-emerald-700 text-white shadow-xs'
-                  : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
               {cat.label}
             </button>
           ))}
         </div>
-
-        {/* Promo Type Badges */}
-        <div className="flex items-center gap-2 overflow-x-auto pt-1 border-t border-stone-100 text-xs">
-          <span className="text-stone-400 font-medium text-[11px] whitespace-nowrap">
-            Promo Filter:
-          </span>
-          {[
-            { id: 'all', label: 'All Deals' },
-            { id: 'bogo', label: 'Buy 1 Get 1 Free (BOGO)' },
-            { id: 'digital_coupon', label: 'Digital Coupons' },
-            { id: 'high_discount', label: '35%+ Off' },
-            { id: 'organic', label: 'Organic' },
-          ].map((type) => (
-            <button
-              key={type.id}
-              onClick={() => setSelectedDealType(type.id)}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition whitespace-nowrap cursor-pointer ${
-                selectedDealType === type.id
-                  ? 'bg-stone-900 text-white'
-                  : 'bg-stone-50 text-stone-600 hover:bg-stone-100 border border-stone-200'
-              }`}
-            >
-              {type.label}
-            </button>
-          ))}
-        </div>
-
       </div>
 
-      {/* Results Count & Match status */}
-      <div className="flex items-center justify-between text-xs text-stone-500 px-1">
-        <span>
-          Showing <strong>{sortedDeals.length}</strong> active flyer deals from <strong>{storesWithinRadius.length}</strong> local stores within {radiusMiles}mi
-        </span>
-        <span className="flex items-center gap-1 text-emerald-700 font-semibold">
-          <Sparkles className="w-3.5 h-3.5" />
-          Unit prices automatically calibrated
-        </span>
-      </div>
-
-      {/* Deals Grid */}
-      {isLoadingCirculars ? (
-        <div className="text-center py-20 bg-white rounded-3xl border border-stone-200 p-8 flex flex-col items-center justify-center">
-          <Loader2 className="w-8 h-8 animate-spin text-emerald-600 mb-3" />
-          <h4 className="text-base font-bold text-stone-800">Fetching Local Store Circulars...</h4>
-          <p className="text-xs text-stone-500 mt-1">
-            Loading real weekly circular flyers and pricing for {location.city}, {location.state}
+      {displayedDeals.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
+          <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400 mb-3">
+            <Search className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-bold text-slate-800">No matching circular deals found</h3>
+          <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+            Try adjusting your search query, switching stores, or resetting category and promotion filters.
           </p>
-        </div>
-      ) : sortedDeals.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-3xl border border-stone-200 p-8">
-          <h4 className="text-base font-bold text-stone-800">No circular deals match your filters</h4>
-          <p className="text-xs text-stone-500 mt-1">
-            Try resetting your search query, increasing the radius ({radiusMiles}mi), or selecting another category.
-          </p>
+          <button
+            onClick={() => {
+              setSearchQuery('');
+              setSelectedCategory('all');
+              setPromoFilter('all');
+              setSelectedStoreId('all');
+            }}
+            className="mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition"
+          >
+            Reset All Filters
+          </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {sortedDeals.map((deal) => {
-            const inList = isDealInList(deal.id);
-            const similarCount = similarDealsCounts.get(deal.genericProductGroup) || 1;
-            const isBest = bestDealIds.has(deal.id);
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+          {displayedDeals.map((deal) => {
+            const stats = groupStats[deal.genericProductGroup];
+            const isLowestInGroup = stats ? deal.normalizedUnitCost <= stats.minUnitCost : false;
+            const competingCount = stats ? stats.count : 1;
+            const isInList = listDealIds.has(deal.id);
 
             return (
               <DealCard
                 key={deal.id}
                 deal={deal}
-                isInShoppingList={inList}
-                onToggleShoppingList={onToggleShoppingList}
-                onCompareSimilar={onCompareSimilar}
-                similarDealsCount={similarCount}
-                isBestInGroup={isBest}
+                isLowestInGroup={isLowestInGroup}
+                competingCount={competingCount}
+                isInList={isInList}
+                onToggleList={onToggleList}
+                onOpenComparison={onOpenComparison}
               />
             );
           })}
         </div>
       )}
-
     </div>
   );
-};
+}

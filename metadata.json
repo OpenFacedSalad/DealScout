@@ -1,6 +1,10 @@
 {
   "name": "DealScout",
-  "description": "Find nearby grocery store circular advertisements by GPS location, compare similar deals for best value, and save favorites to a digital shopping list.",
-  "requestFramePermissions": ["geolocation"],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "description": "Hyper-local weekly grocery circular aggregator and comparative shopping platform. Normalizes unit prices ($/lb, $/oz, $/egg) across physical supermarkets and flags competitor deal swaps.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
