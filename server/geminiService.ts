@@ -4,6 +4,28 @@ import { findPhysicalGroceryStoresOSM, getRegionalDefaultStores } from './storeF
 
 let aiClient: GoogleGenAI | null = null;
 
+async function searchWebScraper(query: string): Promise<string> {
+  try {
+    const params = new URLSearchParams({ q: query });
+    const res = await fetch("https://lite.duckduckgo.com/lite/", {
+      method: 'POST',
+      body: params,
+      headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    const html = await res.text();
+    const textMatches = html.match(/<td class='result-snippet'[^>]*>([\s\S]*?)<\/td>/g);
+    if (textMatches) {
+        return textMatches.map(m => m.replace(/<[^>]+>/g, '').trim()).join('\n');
+    }
+  } catch (e) {
+    console.error("DDG Scraper error:", e);
+  }
+  return "";
+}
+
 export function getAiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -196,13 +218,22 @@ export async function getCircularsForLocation(
 
     const currentDate = new Date().toISOString().split('T')[0];
 
+    const webSnippets = [];
+    for (const s of stores.slice(0, 3)) {
+       const snippet = await searchWebScraper(`${s.name} ${city} ${state} weekly ad circular deals`);
+       if (snippet) webSnippets.push(`--- Search Results for ${s.name} ---\n${snippet}`);
+    }
+    const karnSnippet = await searchWebScraper(`Karns Quality Foods Mechanicsburg PA weekly ad circular chicken wings price`);
+    if (karnSnippet) webSnippets.push(`--- Search Results for Karns Chicken Wings ---\n${karnSnippet}`);
+    const combinedSnippets = webSnippets.join('\n\n');
+
     const prompt = `
-Search the live web for the current weekly grocery circulars, flyers, and advertised specials for supermarkets near ${city}, ${state} ${zipCode} active as of ${currentDate}.
+Based on the following live web search snippets for current weekly grocery circulars, flyers, and advertised specials for supermarkets near ${city}, ${state} ${zipCode} active as of ${currentDate}:\n\n${combinedSnippets}\n\n
 Target Supermarkets:
 ${JSON.stringify(storeSummary, null, 2)}
 
 Instructions:
-1. Search specifically for live weekly ad flyers for these chains in ${city}, ${state} (e.g., Karns Foods circular, ALDI Finds & weekly produce, Giant Food Stores weekly circular, Weis weekly specials).
+1. Extract authentic advertised items, sales, and butcher shop specials from the search snippets provided.
 2. Extract authentic advertised items, sales, and butcher shop specials. ENSURE you include the current Karn's deal on chicken wings.
 3. For each deal found:
    - "storeId": Match the EXACT store "id" provided above.
@@ -225,15 +256,29 @@ Instructions:
 4. Return ONLY a valid JSON array of deal objects.
 `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
-      contents: prompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-        temperature: 0.1,
-      },
-    });
+    let response;
+    let retries = 3;
+    const modelsToTry = ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.8-flash'];
+    for (let i = 0; i < retries; i++) {
+      try {
+        response = await ai.models.generateContent({
+          model: modelsToTry[i % modelsToTry.length],
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+            temperature: i > 0 ? 0.4 : 0.1,
+          },
+        });
+        break;
+      } catch (err) {
+        console.error(`[GeminiService] Attempt ${i + 1} failed with model ${modelsToTry[i % modelsToTry.length]}: ${err.message}`);
+        if (i === retries - 1) throw err;
+        await new Promise(resolve => setTimeout(resolve, 2000)); // wait 2s before retry
+      }
+    }
 
+    console.log('[GeminiService] Raw Gemini response text:', response.text);
+    
     const groundedDeals = parseJsonFromText<DealItem[]>(response.text || '', []);
 
     if (Array.isArray(groundedDeals) && groundedDeals.length > 0) {
@@ -257,15 +302,13 @@ Instructions:
       });
 
       return { stores, deals: groundedDeals };
+    } else {
+      throw new Error('AI returned an empty or invalid array of deals. Response: ' + response.text);
     }
   } catch (error) {
-    console.warn('[GeminiService] Grounded circular search failed, falling back to schema generator:', error);
+    console.error('[GeminiService] Grounded circular search failed:', error);
+    throw error;
   }
-
-  return {
-    stores,
-    deals: generateDeterministicFallbackDeals(stores),
-  };
 }
 
 /**
