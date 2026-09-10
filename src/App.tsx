@@ -64,9 +64,26 @@ export default function App() {
     }
   });
 
+  const STORAGE_KEY_STORES = 'dealscout_cached_stores_v2';
+  const STORAGE_KEY_DEALS = 'dealscout_cached_deals_v2';
+
   const [activeTab, setActiveTab] = useState<ActiveTab>('circulars');
-  const [stores, setStores] = useState<Store[]>([]);
-  const [deals, setDeals] = useState<DealItem[]>([]);
+  const [stores, setStores] = useState<Store[]>(() => {
+    try {
+      const saved = safeStorage.getItem(STORAGE_KEY_STORES);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [deals, setDeals] = useState<DealItem[]>(() => {
+    try {
+      const saved = safeStorage.getItem(STORAGE_KEY_DEALS);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isGpsLocating, setIsGpsLocating] = useState<boolean>(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -113,8 +130,17 @@ export default function App() {
         }
 
         const data = await response.json();
-        setStores(data.stores || []);
-        setDeals(data.deals || []);
+        const newStores = data.stores || [];
+        const newDeals = data.deals || [];
+        
+        if (newStores.length > 0) {
+          setStores(newStores);
+          safeStorage.setItem(STORAGE_KEY_STORES, JSON.stringify(newStores));
+        }
+        if (newDeals.length > 0) {
+          setDeals(newDeals);
+          safeStorage.setItem(STORAGE_KEY_DEALS, JSON.stringify(newDeals));
+        }
       } catch (err: any) {
         console.error('[App] Error loading circulars:', err);
         setFetchError(err.message || 'Failed to load local grocery circulars.');

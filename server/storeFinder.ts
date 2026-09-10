@@ -201,10 +201,10 @@ export async function findPhysicalGroceryStoresOSM(
 ): Promise<Store[]> {
   const radiusMeters = Math.round(radiusMiles * 1609.34);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), 2500);
 
   const query = `
-    [out:json][timeout:8];
+    [out:json][timeout:3];
     (
       node["shop"~"supermarket|grocery"](around:${radiusMeters},${lat},${lng});
       way["shop"~"supermarket|grocery"](around:${radiusMeters},${lat},${lng});

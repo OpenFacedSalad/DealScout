@@ -1,6 +1,8 @@
 import express, { Request, Response } from 'express';
-import { geocodeQuery, reverseGeocodeCoords } from '../server/storeFinder';
+import { geocodeQuery, reverseGeocodeCoords, getRegionalDefaultStores } from '../server/storeFinder';
 import { getCircularsForLocation, compareDealsWithAI, parseFlyerWithAI } from '../server/geminiService';
+import { getFullKarnsCircularDeals } from '../server/karnsScraper';
+import { DealItem } from '../src/types';
 
 const app = express();
 
@@ -13,6 +15,11 @@ app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
+  }
+  // If Vercel rewrote /api/(.*) to /api, restore the requested subpath from Vercel headers
+  const matchedPath = (req.headers['x-matched-path'] as string) || (req.headers['x-rewrite-url'] as string);
+  if (matchedPath && (req.url === '/api' || req.url === '/' || req.url === '')) {
+    req.url = matchedPath;
   }
   next();
 });
@@ -65,21 +72,47 @@ router.post('/location/resolve', async (req: Request, res: Response) => {
 
 router.post('/circulars/nearby', async (req: Request, res: Response) => {
   try {
-    const { lat, lng, city, state, zipCode, radiusMiles } = req.body;
+    const { lat, lng, city, state, zipCode, radiusMiles } = req.body || {};
 
-    const data = await getCircularsForLocation(
-      lat !== undefined && !isNaN(Number(lat)) ? Number(lat) : 40.2137,
-      lng !== undefined && !isNaN(Number(lng)) ? Number(lng) : -77.0075,
-      city || 'Mechanicsburg',
-      state || 'PA',
-      zipCode || '17050',
-      Number(radiusMiles) || 10
-    );
+    const targetLat = lat !== undefined && !isNaN(Number(lat)) ? Number(lat) : 40.2137;
+    const targetLng = lng !== undefined && !isNaN(Number(lng)) ? Number(lng) : -77.0075;
+    const targetCity = city || 'Mechanicsburg';
+    const targetState = state || 'PA';
+    const targetZip = zipCode || '17050';
+    const targetRadius = Number(radiusMiles) > 0 ? Number(radiusMiles) : 10;
+
+    let data;
+    try {
+      data = await getCircularsForLocation(
+        targetLat,
+        targetLng,
+        targetCity,
+        targetState,
+        targetZip,
+        targetRadius
+      );
+    } catch (innerErr: any) {
+      console.warn('[API circulars/nearby] Live retrieval failed, using fallback:', innerErr);
+      const stores = getRegionalDefaultStores(targetCity, targetState, targetLat, targetLng, targetRadius);
+      const karns = stores.find((s) => s.name.toLowerCase().includes('karns'));
+      let deals: DealItem[] = [];
+      if (karns) {
+        deals = await getFullKarnsCircularDeals(karns);
+      }
+      data = { stores, deals };
+    }
 
     return res.json(data);
   } catch (err: any) {
     console.error('[API circulars/nearby] Error fetching circulars:', err);
-    return res.status(500).json({ error: err.message || 'Failed to fetch circulars' });
+    try {
+      const fallbackStores = getRegionalDefaultStores('Mechanicsburg', 'PA', 40.2137, -77.0075, 10);
+      const karns = fallbackStores.find((s) => s.name.toLowerCase().includes('karns'));
+      const deals = karns ? await getFullKarnsCircularDeals(karns) : [];
+      return res.status(200).json({ stores: fallbackStores, deals });
+    } catch {
+      return res.status(200).json({ stores: [], deals: [] });
+    }
   }
 });
 

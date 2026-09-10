@@ -2,8 +2,10 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import express, { Request, Response, NextFunction } from 'express';
-import { geocodeQuery, reverseGeocodeCoords } from './server/storeFinder';
+import { geocodeQuery, reverseGeocodeCoords, getRegionalDefaultStores } from './server/storeFinder';
 import { getCircularsForLocation, compareDealsWithAI, parseFlyerWithAI } from './server/geminiService';
+import { getFullKarnsCircularDeals } from './server/karnsScraper';
+import { DealItem } from './src/types';
 
 // In ESM, import.meta.url is defined. In CJS, __filename and __dirname are defined.
 const _filename = typeof __filename !== 'undefined' ? __filename : (typeof import.meta !== 'undefined' && import.meta.url ? fileURLToPath(import.meta.url) : '');
@@ -81,30 +83,47 @@ async function startServer() {
 
   app.post('/api/circulars/nearby', async (req: Request, res: Response) => {
     try {
-      const { lat, lng, city, state, zipCode, radiusMiles } = req.body;
+      const { lat, lng, city, state, zipCode, radiusMiles } = req.body || {};
 
-      if (lat === undefined || lng === undefined || isNaN(Number(lat)) || isNaN(Number(lng))) {
-        return res.status(400).json({ error: 'Numeric lat and lng coordinates are required.' });
-      }
-
+      const targetLat = lat !== undefined && !isNaN(Number(lat)) ? Number(lat) : 40.2137;
+      const targetLng = lng !== undefined && !isNaN(Number(lng)) ? Number(lng) : -77.0075;
       const radius = Number(radiusMiles) > 0 ? Number(radiusMiles) : 10;
       const targetCity = city || 'Mechanicsburg';
       const targetState = state || 'PA';
       const targetZip = zipCode || '17050';
 
-      const data = await getCircularsForLocation(
-        Number(lat),
-        Number(lng),
-        targetCity,
-        targetState,
-        targetZip,
-        radius
-      );
+      let data;
+      try {
+        data = await getCircularsForLocation(
+          targetLat,
+          targetLng,
+          targetCity,
+          targetState,
+          targetZip,
+          radius
+        );
+      } catch (innerErr: any) {
+        console.warn('[API /circulars/nearby] Live retrieval failed, using regional fallback:', innerErr);
+        const stores = getRegionalDefaultStores(targetCity, targetState, targetLat, targetLng, radius);
+        const karns = stores.find((s) => s.name.toLowerCase().includes('karns'));
+        let deals: DealItem[] = [];
+        if (karns) {
+          deals = await getFullKarnsCircularDeals(karns);
+        }
+        data = { stores, deals };
+      }
 
       return res.json(data);
     } catch (error: any) {
-      console.error('[API /circulars/nearby] Error:', error);
-      return res.status(500).json({ error: error.message || 'Failed to fetch nearby circulars' });
+      console.error('[API /circulars/nearby] Critical error:', error);
+      try {
+        const fallbackStores = getRegionalDefaultStores('Mechanicsburg', 'PA', 40.2137, -77.0075, 10);
+        const karns = fallbackStores.find((s) => s.name.toLowerCase().includes('karns'));
+        const deals = karns ? await getFullKarnsCircularDeals(karns) : [];
+        return res.status(200).json({ stores: fallbackStores, deals });
+      } catch {
+        return res.status(200).json({ stores: [], deals: [] });
+      }
     }
   });
 

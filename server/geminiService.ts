@@ -10,7 +10,7 @@ const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 async function searchWebScraper(query: string): Promise<string> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3500);
+  const timer = setTimeout(() => controller.abort(), 1500);
   try {
     const params = new URLSearchParams({ q: query });
     const res = await fetch("https://lite.duckduckgo.com/lite/", {
@@ -327,18 +327,24 @@ Instructions:
 `;
 
     let response;
-    // Supported models per @google/genai guidelines with graceful degradation
-    const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+    // Supported models per @google/genai guidelines with graceful degradation and fast serverless timeout
+    const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest'];
     for (let i = 0; i < modelsToTry.length; i++) {
       try {
-        response = await ai.models.generateContent({
-          model: modelsToTry[i],
-          contents: prompt,
-          config: {
-            responseMimeType: 'application/json',
-            temperature: 0.1,
-          },
-        });
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('AI inference timeout')), 2200)
+        );
+        response = (await Promise.race([
+          ai.models.generateContent({
+            model: modelsToTry[i],
+            contents: prompt,
+            config: {
+              responseMimeType: 'application/json',
+              temperature: 0.1,
+            },
+          }),
+          timeoutPromise,
+        ])) as any;
         if (response?.text) {
           break;
         }
