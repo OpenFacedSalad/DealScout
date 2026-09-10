@@ -10,6 +10,7 @@ import {
 } from './types';
 import { groupSimilarDeals, findBetterAlternative } from './utils/dealMatcher';
 import { queueCartAction } from './utils/syncQueue';
+import { safeStorage } from './utils/safeStorage';
 import Header from './components/Header';
 import LocationModal from './components/LocationModal';
 import CircularsView from './components/CircularsView';
@@ -38,7 +39,7 @@ const DEFAULT_LOCATION: UserLocation = {
 export default function App() {
   const [location, setLocation] = useState<UserLocation>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY_LOCATION);
+      const saved = safeStorage.getItem(STORAGE_KEY_LOCATION);
       return saved ? JSON.parse(saved) : DEFAULT_LOCATION;
     } catch {
       return DEFAULT_LOCATION;
@@ -47,7 +48,7 @@ export default function App() {
 
   const [radiusMiles, setRadiusMiles] = useState<RadiusOption>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY_RADIUS);
+      const saved = safeStorage.getItem(STORAGE_KEY_RADIUS);
       return saved ? (Number(saved) as RadiusOption) : 10;
     } catch {
       return 10;
@@ -56,7 +57,7 @@ export default function App() {
 
   const [rawShoppingList, setRawShoppingList] = useState<ShoppingListItem[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY_LIST);
+      const saved = safeStorage.getItem(STORAGE_KEY_LIST);
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -77,15 +78,15 @@ export default function App() {
   const [selectedComparisonGroup, setSelectedComparisonGroup] = useState<ComparisonGroup | null>(null);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_LOCATION, JSON.stringify(location));
+    safeStorage.setItem(STORAGE_KEY_LOCATION, JSON.stringify(location));
   }, [location]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_RADIUS, radiusMiles.toString());
+    safeStorage.setItem(STORAGE_KEY_RADIUS, radiusMiles.toString());
   }, [radiusMiles]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_LIST, JSON.stringify(rawShoppingList));
+    safeStorage.setItem(STORAGE_KEY_LIST, JSON.stringify(rawShoppingList));
   }, [rawShoppingList]);
 
   const fetchCirculars = useCallback(

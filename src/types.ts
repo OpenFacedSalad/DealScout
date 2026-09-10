@@ -62,6 +62,7 @@ export interface DealItem {
   storeLogoText: string;
   title: string;
   subtitle?: string;
+  imageUrl?: string;
   category: DealCategory;
   originalPrice: number;
   salePrice: number;

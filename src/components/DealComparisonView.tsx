@@ -140,14 +140,14 @@ export default function DealComparisonView({
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {filteredGroups.map((group) => {
+          {filteredGroups.map((group, gIdx) => {
             const best = group.bestDeal;
             const runnersUp = group.deals.slice(1);
             const isBestInList = listDealIds.has(best.id);
 
             return (
               <div
-                key={group.genericProductGroup}
+                key={group.genericProductGroup ? `group-${group.genericProductGroup}` : `group-idx-${gIdx}`}
                 className="bg-white rounded-2xl border border-slate-200 hover:border-slate-300 transition-all p-5 shadow-xs flex flex-col justify-between"
               >
                 <div>
@@ -219,7 +219,7 @@ export default function DealComparisonView({
                       <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
                         Other Store Offers:
                       </span>
-                      {runnersUp.map((deal) => {
+                      {runnersUp.map((deal, rIdx) => {
                         const unitDelta = deal.normalizedUnitCost - best.normalizedUnitCost;
                         const pctHigher = best.normalizedUnitCost > 0
                           ? Math.round((unitDelta / best.normalizedUnitCost) * 100)
@@ -227,7 +227,7 @@ export default function DealComparisonView({
 
                         return (
                           <div
-                            key={deal.id}
+                            key={deal.id ? `runner-${deal.id}` : `runner-${deal.storeId || 'store'}-${rIdx}`}
                             className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs"
                           >
                             <div className="flex items-center space-x-2 truncate mr-2">

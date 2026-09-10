@@ -116,8 +116,8 @@ export default function FlyerUploadModal({
               onChange={(e) => setSelectedStoreId(e.target.value)}
               className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
             >
-              {stores.map((store) => (
-                <option key={store.id} value={store.id}>
+              {stores.map((store, idx) => (
+                <option key={store.id ? `store-opt-${store.id}` : `store-opt-${idx}`} value={store.id}>
                   {store.name} ({store.distanceMiles} mi)
                 </option>
               ))}

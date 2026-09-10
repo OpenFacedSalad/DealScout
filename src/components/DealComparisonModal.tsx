@@ -199,7 +199,7 @@ export default function DealComparisonModal({
 
                 return (
                   <div
-                    key={deal.id}
+                    key={deal.id ? `modal-deal-${deal.id}` : `modal-deal-${deal.storeId || 'item'}-${idx}`}
                     className={`rounded-xl border p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition ${
                       isBest
                         ? 'bg-emerald-50/40 border-emerald-300 ring-1 ring-emerald-300/40 shadow-xs'

@@ -233,9 +233,9 @@ export default function ShoppingListView({
                 </div>
 
                 <div className="divide-y divide-slate-100">
-                  {group.items.map((item) => (
+                  {group.items.map((item, idx) => (
                     <ShoppingListItemRow
-                      key={item.id}
+                      key={item.id ? `item-${item.id}` : `item-${idx}`}
                       item={item}
                       isPendingSync={pendingItemIds.has(item.id)}
                       onToggleChecked={onToggleChecked}
@@ -251,9 +251,9 @@ export default function ShoppingListView({
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs divide-y divide-slate-100">
-          {items.map((item) => (
+          {items.map((item, idx) => (
             <ShoppingListItemRow
-              key={item.id}
+              key={item.id ? `item-${item.id}` : `item-${idx}`}
               item={item}
               isPendingSync={pendingItemIds.has(item.id)}
               onToggleChecked={onToggleChecked}

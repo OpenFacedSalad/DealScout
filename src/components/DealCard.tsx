@@ -107,6 +107,23 @@ export default function DealCard({
           )}
         </div>
 
+        {deal.imageUrl && (
+          <div className="relative mb-3 h-36 w-full overflow-hidden rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center p-2">
+            <img
+              src={deal.imageUrl}
+              alt={deal.title}
+              className="max-h-full max-w-full object-contain group-hover:scale-105 transition-transform duration-300"
+              loading="lazy"
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (target.parentElement) {
+                  target.parentElement.style.display = 'none';
+                }
+              }}
+            />
+          </div>
+        )}
+
         <div className="mb-3">
           <h3 className="font-bold text-slate-900 text-sm sm:text-base leading-snug line-clamp-2">
             {deal.title}

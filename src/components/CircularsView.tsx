@@ -192,9 +192,9 @@ export default function CircularsView({
           </span>
         </button>
 
-        {stores.map((store) => (
+        {stores.map((store, sIdx) => (
           <button
-            key={store.id}
+            key={store.id ? `store-${store.id}` : `store-idx-${sIdx}`}
             onClick={() => setSelectedStoreId(store.id)}
             className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap transition shadow-2xs border ${
               selectedStoreId === store.id
@@ -403,7 +403,7 @@ export default function CircularsView({
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-          {displayedDeals.map((deal) => {
+          {displayedDeals.map((deal, dIdx) => {
             const stats = groupStats[deal.genericProductGroup];
             const isLowestInGroup = stats ? deal.normalizedUnitCost <= stats.minUnitCost : false;
             const competingCount = stats ? stats.count : 1;
@@ -411,7 +411,7 @@ export default function CircularsView({
 
             return (
               <DealCard
-                key={deal.id}
+                key={deal.id ? `deal-${deal.id}` : `deal-${deal.storeId || 'item'}-${dIdx}`}
                 deal={deal}
                 isLowestInGroup={isLowestInGroup}
                 competingCount={competingCount}
