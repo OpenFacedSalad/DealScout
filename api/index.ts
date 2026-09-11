@@ -1,8 +1,8 @@
 import express, { Request, Response } from 'express';
-import { geocodeQuery, reverseGeocodeCoords, getRegionalDefaultStores } from './_lib/storeFinder';
-import { getCircularsForLocation, compareDealsWithAI, parseFlyerWithAI } from './_lib/geminiService';
-import { getFullKarnsCircularDeals } from './_lib/karnsScraper';
-import { DealItem } from '../src/types';
+import { geocodeQuery, reverseGeocodeCoords, getRegionalDefaultStores } from './_lib/storeFinder.js';
+import { getCircularsForLocation, compareDealsWithAI, parseFlyerWithAI } from './_lib/geminiService.js';
+import { getFullKarnsCircularDeals } from './_lib/karnsScraper.js';
+import { DealItem } from '../src/types.js';
 
 const app = express();
 

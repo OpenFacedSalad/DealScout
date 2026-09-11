@@ -1,5 +1,5 @@
-import { Store, DealItem, DealCategory, DealType, NormalizedUnitType } from '../../src/types';
-import { KARNS_FULL_CIRCULAR_SNAPSHOT, KARNS_CIRCULAR_VALID_DATES } from './karnsSnapshotData';
+import { Store, DealItem, DealCategory, DealType, NormalizedUnitType } from '../../src/types.js';
+import { KARNS_FULL_CIRCULAR_SNAPSHOT, KARNS_CIRCULAR_VALID_DATES } from './karnsSnapshotData.js';
 
 interface RawItem {
   rawTitle: string;

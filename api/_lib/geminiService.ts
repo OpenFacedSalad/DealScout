@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
-import { Store, DealItem } from '../../src/types';
-import { findPhysicalGroceryStoresOSM, getRegionalDefaultStores } from './storeFinder';
-import { getFullKarnsCircularDeals } from './karnsScraper';
+import { Store, DealItem } from '../../src/types.js';
+import { findPhysicalGroceryStoresOSM, getRegionalDefaultStores } from './storeFinder.js';
+import { getFullKarnsCircularDeals } from './karnsScraper.js';
 
 let aiClient: GoogleGenAI | null = null;
 
