@@ -1,4 +1,4 @@
-import { Store } from '../src/types';
+import { Store } from '../../src/types';
 
 const NOMINATIM_USER_AGENT = 'DealScout-Grocery-App/2.0 (contact: support@dealscout.local)';
 const NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org';

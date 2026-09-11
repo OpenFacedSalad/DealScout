@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
-import { geocodeQuery, reverseGeocodeCoords, getRegionalDefaultStores } from '../server/storeFinder';
-import { getCircularsForLocation, compareDealsWithAI, parseFlyerWithAI } from '../server/geminiService';
-import { getFullKarnsCircularDeals } from '../server/karnsScraper';
+import { geocodeQuery, reverseGeocodeCoords, getRegionalDefaultStores } from './_lib/storeFinder';
+import { getCircularsForLocation, compareDealsWithAI, parseFlyerWithAI } from './_lib/geminiService';
+import { getFullKarnsCircularDeals } from './_lib/karnsScraper';
 import { DealItem } from '../src/types';
 
 const app = express();
@@ -104,15 +104,8 @@ router.post('/circulars/nearby', async (req: Request, res: Response) => {
 
     return res.json(data);
   } catch (err: any) {
-    console.error('[API circulars/nearby] Error fetching circulars:', err);
-    try {
-      const fallbackStores = getRegionalDefaultStores('Mechanicsburg', 'PA', 40.2137, -77.0075, 10);
-      const karns = fallbackStores.find((s) => s.name.toLowerCase().includes('karns'));
-      const deals = karns ? await getFullKarnsCircularDeals(karns) : [];
-      return res.status(200).json({ stores: fallbackStores, deals });
-    } catch {
-      return res.status(200).json({ stores: [], deals: [] });
-    }
+    console.error('[API /circulars/nearby Error Stack]:', err);
+    return res.status(500).json({ error: err.message || 'Failed to fetch circulars', stack: err.stack });
   }
 });
 

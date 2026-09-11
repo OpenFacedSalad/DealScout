@@ -2,9 +2,9 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import express, { Request, Response, NextFunction } from 'express';
-import { geocodeQuery, reverseGeocodeCoords, getRegionalDefaultStores } from './server/storeFinder';
-import { getCircularsForLocation, compareDealsWithAI, parseFlyerWithAI } from './server/geminiService';
-import { getFullKarnsCircularDeals } from './server/karnsScraper';
+import { geocodeQuery, reverseGeocodeCoords, getRegionalDefaultStores } from './api/_lib/storeFinder';
+import { getCircularsForLocation, compareDealsWithAI, parseFlyerWithAI } from './api/_lib/geminiService';
+import { getFullKarnsCircularDeals } from './api/_lib/karnsScraper';
 import { DealItem } from './src/types';
 
 // In ESM, import.meta.url is defined. In CJS, __filename and __dirname are defined.

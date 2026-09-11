@@ -1,4 +1,4 @@
-import { Store, DealItem, DealCategory, DealType, NormalizedUnitType } from '../src/types';
+import { Store, DealItem, DealCategory, DealType, NormalizedUnitType } from '../../src/types';
 import { KARNS_FULL_CIRCULAR_SNAPSHOT, KARNS_CIRCULAR_VALID_DATES } from './karnsSnapshotData';
 
 interface RawItem {

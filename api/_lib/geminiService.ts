@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
-import { Store, DealItem } from '../src/types';
+import { Store, DealItem } from '../../src/types';
 import { findPhysicalGroceryStoresOSM, getRegionalDefaultStores } from './storeFinder';
 import { getFullKarnsCircularDeals } from './karnsScraper';
 
@@ -215,10 +215,10 @@ export async function getCircularsForLocation(
   }
 
   // Ensure Karns Quality Foods is included if searching within PA or Central PA / Mechanicsburg
-  const hasKarns = stores.some((s) => s.name.toLowerCase().includes('karns') || s.chain.toLowerCase().includes('karns'));
+  const hasKarns = stores.some((s) => (s?.name || '').toLowerCase().includes('karns') || (s?.chain || '').toLowerCase().includes('karns'));
   if (!hasKarns && (state.toUpperCase() === 'PA' || city.toLowerCase().includes('mechanicsburg') || city.toLowerCase().includes('harrisburg') || city.toLowerCase().includes('camp hill') || city.toLowerCase().includes('carlisle'))) {
     const karnsDefaults = getRegionalDefaultStores('Mechanicsburg', 'PA', 40.2396, -76.9698, radiusMiles);
-    const karns = karnsDefaults.find((s) => s.name.toLowerCase().includes('karns'));
+    const karns = karnsDefaults.find((s) => (s?.name || '').toLowerCase().includes('karns'));
     if (karns && !stores.some(s => s.id === karns.id)) {
       stores.unshift(karns);
     }
@@ -227,11 +227,11 @@ export async function getCircularsForLocation(
   // Deduplicate stores by ID
   const uniqueStoreMap = new Map<string, Store>();
   for (const s of stores) {
-    if (!uniqueStoreMap.has(s.id)) {
+    if (s && s.id && !uniqueStoreMap.has(s.id)) {
       uniqueStoreMap.set(s.id, s);
     }
   }
-  stores = Array.from(uniqueStoreMap.values()).filter((s) => s.distanceMiles <= radiusMiles);
+  stores = (Array.from(uniqueStoreMap.values()) || []).filter((s) => (s?.distanceMiles ?? 0) <= radiusMiles);
 
   if (stores.length === 0) {
     return { stores: [], deals: [] };
@@ -239,7 +239,7 @@ export async function getCircularsForLocation(
 
   // Always fetch the complete, authentic Karns circular (all 226 items)
   let karnsDeals: DealItem[] = [];
-  const karnsStore = stores.find((s) => s.name.toLowerCase().includes('karns') || s.chain.toLowerCase().includes('karns'));
+  const karnsStore = stores.find((s) => (s?.name || '').toLowerCase().includes('karns') || (s?.chain || '').toLowerCase().includes('karns'));
   if (karnsStore) {
     try {
       karnsDeals = await getFullKarnsCircularDeals(karnsStore);
@@ -581,10 +581,11 @@ function generateDeterministicFallbackDeals(stores: Store[]): DealItem[] {
   const validUntilStr = futureDate.toISOString().split('T')[0];
 
   stores.forEach((store) => {
-    const isBudget = store.chain.toLowerCase().includes('aldi');
-    const isButcher = store.chain.toLowerCase().includes('karns');
-    const isWeis = store.chain.toLowerCase().includes('weis');
-    const isGiant = store.chain.toLowerCase().includes('giant');
+    const chainOrName = (store.chain || store.name || '').toLowerCase();
+    const isBudget = chainOrName.includes('aldi');
+    const isButcher = chainOrName.includes('karns');
+    const isWeis = chainOrName.includes('weis');
+    const isGiant = chainOrName.includes('giant');
 
     const beefPrice = isButcher ? 3.49 : isBudget ? 3.89 : 4.99;
     deals.push({
