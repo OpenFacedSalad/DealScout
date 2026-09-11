@@ -5932,8 +5932,7 @@ async function searchWebScraper(query) {
     if (textMatches) {
       return textMatches.map((m) => m.replace(/<[^>]+>/g, "").trim()).join("\n");
     }
-  } catch (e) {
-    console.warn("[DDG Scraper] Request completed or timed out:", e);
+  } catch {
   } finally {
     clearTimeout(timer);
   }
@@ -5942,7 +5941,6 @@ async function searchWebScraper(query) {
 function getAiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    console.warn("[GeminiService] GEMINI_API_KEY is not set. Operating in deterministic fallback mode.");
     return null;
   }
   if (!aiClient) {
@@ -6054,21 +6052,26 @@ var comparisonResponseSchema = {
   required: ["bestDealId", "verdict", "keyDifference", "unitPriceAdvantage", "caveats"]
 };
 function parseJsonFromText(text, fallback) {
+  if (!text || typeof text !== "string") {
+    return fallback;
+  }
+  const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+  if (!cleaned) {
+    return fallback;
+  }
   try {
-    const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
     const jsonStart = cleaned.indexOf("[");
     const jsonEnd = cleaned.lastIndexOf("]");
-    if (jsonStart !== -1 && jsonEnd !== -1) {
+    if (jsonStart !== -1 && jsonEnd > jsonStart) {
       return JSON.parse(cleaned.substring(jsonStart, jsonEnd + 1));
     }
     const objStart = cleaned.indexOf("{");
     const objEnd = cleaned.lastIndexOf("}");
-    if (objStart !== -1 && objEnd !== -1) {
+    if (objStart !== -1 && objEnd > objStart) {
       return JSON.parse(cleaned.substring(objStart, objEnd + 1));
     }
     return JSON.parse(cleaned);
-  } catch (err) {
-    console.warn("[GeminiService] Failed to parse structured JSON from text payload:", err);
+  } catch {
     return fallback;
   }
 }
@@ -6191,13 +6194,13 @@ Instructions:
 3. Return ONLY a valid JSON array of deal objects.
 `;
     let response;
-    const modelsToTry = ["gemini-3.8-flash", "gemini-flash-latest"];
+    const modelsToTry = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"];
     for (let i = 0; i < modelsToTry.length; i++) {
       try {
         const timeoutPromise = new Promise(
-          (_, reject) => setTimeout(() => reject(new Error("AI inference timeout")), 2200)
+          (_, reject) => setTimeout(() => reject(new Error("AI inference timeout")), 2500)
         );
-        response = await Promise.race([
+        const result2 = await Promise.race([
           ai.models.generateContent({
             model: modelsToTry[i],
             contents: prompt,
@@ -6208,16 +6211,14 @@ Instructions:
           }),
           timeoutPromise
         ]);
-        if (response?.text) {
+        if (result2?.text && result2.text.trim()) {
+          response = result2;
           break;
         }
-      } catch (err) {
-        const status = err?.status || err?.code || "";
-        const msg = err?.message || "";
-        console.warn(`[GeminiService] Model attempt ${i + 1} (${modelsToTry[i]}) notice: ${status} ${msg.slice(0, 80)}`);
+      } catch {
       }
     }
-    const groundedDeals = parseJsonFromText(response?.text || "", []);
+    const groundedDeals = response?.text ? parseJsonFromText(response.text, []) : [];
     let nonKarnsDeals = [];
     if (Array.isArray(groundedDeals) && groundedDeals.length > 0) {
       groundedDeals.forEach((d, idx) => {
@@ -6310,7 +6311,7 @@ Requirements for each extracted item:
 16. "validUntil": Extract valid flyer end date, or set to next Tuesday/Wednesday.
 17. "inStock": true.
 `;
-  const modelsToTry = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
+  const modelsToTry = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"];
   let response;
   for (let i = 0; i < modelsToTry.length; i++) {
     try {
@@ -6332,13 +6333,10 @@ Requirements for each extracted item:
         }
       });
       if (response?.text) break;
-    } catch (err) {
-      const status = err?.status || err?.code || "";
-      console.warn(`[GeminiService] Flyer OCR model ${modelsToTry[i]} note: ${status}`);
-      if (i === modelsToTry.length - 1) throw err;
+    } catch {
     }
   }
-  const parsed = JSON.parse(response?.text || "[]");
+  const parsed = response?.text ? parseJsonFromText(response.text, []) : [];
   return parsed.map((item, idx) => ({
     ...item,
     id: item.id || `scanned-${store.id}-${Date.now()}-${idx}`,
@@ -6379,7 +6377,7 @@ Evaluation Criteria:
 2. Note if a lower price requires buying multiples (e.g. Buy 2 Get 1 Free, Must Buy 3) or digital loyalty coupons.
 3. Compare quality tiers (Organic/Grass-fed vs Conventional).
 `;
-    const modelsToTry = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
+    const modelsToTry = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"];
     let response;
     for (let i = 0; i < modelsToTry.length; i++) {
       try {
@@ -6393,19 +6391,16 @@ Evaluation Criteria:
           }
         });
         if (response?.text) break;
-      } catch (err) {
-        const status = err?.status || err?.code || "";
-        console.warn(`[GeminiService] AI comparison model ${modelsToTry[i]} note: ${status}`);
+      } catch {
       }
     }
     if (response?.text) {
-      const parsed = JSON.parse(response.text);
-      if (parsed.bestDealId && parsed.verdict) {
+      const parsed = parseJsonFromText(response.text, null);
+      if (parsed && parsed.bestDealId && parsed.verdict) {
         return parsed;
       }
     }
-  } catch (error) {
-    console.warn("[GeminiService] AI deal comparison notice, utilizing deterministic calculations.");
+  } catch {
   }
   return generateDeterministicComparison(productGroupName, deals);
 }

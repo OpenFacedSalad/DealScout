@@ -27,8 +27,8 @@ async function searchWebScraper(query: string): Promise<string> {
     if (textMatches) {
       return textMatches.map(m => m.replace(/<[^>]+>/g, '').trim()).join('\n');
     }
-  } catch (e) {
-    console.warn("[DDG Scraper] Request completed or timed out:", e);
+  } catch {
+    // Request timeout or abort handled cleanly
   } finally {
     clearTimeout(timer);
   }
@@ -38,7 +38,6 @@ async function searchWebScraper(query: string): Promise<string> {
 export function getAiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    console.warn('[GeminiService] GEMINI_API_KEY is not set. Operating in deterministic fallback mode.');
     return null;
   }
 
@@ -161,22 +160,27 @@ const comparisonResponseSchema: Schema = {
   required: ['bestDealId', 'verdict', 'keyDifference', 'unitPriceAdvantage', 'caveats'],
 };
 
-function parseJsonFromText<T>(text: string, fallback: T): T {
+function parseJsonFromText<T>(text: string | null | undefined, fallback: T): T {
+  if (!text || typeof text !== 'string') {
+    return fallback;
+  }
+  const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+  if (!cleaned) {
+    return fallback;
+  }
   try {
-    const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
     const jsonStart = cleaned.indexOf('[');
     const jsonEnd = cleaned.lastIndexOf(']');
-    if (jsonStart !== -1 && jsonEnd !== -1) {
+    if (jsonStart !== -1 && jsonEnd > jsonStart) {
       return JSON.parse(cleaned.substring(jsonStart, jsonEnd + 1));
     }
     const objStart = cleaned.indexOf('{');
     const objEnd = cleaned.lastIndexOf('}');
-    if (objStart !== -1 && objEnd !== -1) {
+    if (objStart !== -1 && objEnd > objStart) {
       return JSON.parse(cleaned.substring(objStart, objEnd + 1));
     }
     return JSON.parse(cleaned);
-  } catch (err) {
-    console.warn('[GeminiService] Failed to parse structured JSON from text payload:', err);
+  } catch {
     return fallback;
   }
 }
@@ -328,13 +332,13 @@ Instructions:
 
     let response;
     // Supported models per @google/genai guidelines with graceful degradation and fast serverless timeout
-    const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest'];
+    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
     for (let i = 0; i < modelsToTry.length; i++) {
       try {
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('AI inference timeout')), 2200)
+          setTimeout(() => reject(new Error('AI inference timeout')), 2500)
         );
-        response = (await Promise.race([
+        const result = (await Promise.race([
           ai.models.generateContent({
             model: modelsToTry[i],
             contents: prompt,
@@ -345,17 +349,16 @@ Instructions:
           }),
           timeoutPromise,
         ])) as any;
-        if (response?.text) {
+        if (result?.text && result.text.trim()) {
+          response = result;
           break;
         }
-      } catch (err: any) {
-        const status = err?.status || err?.code || '';
-        const msg = err?.message || '';
-        console.warn(`[GeminiService] Model attempt ${i + 1} (${modelsToTry[i]}) notice: ${status} ${msg.slice(0, 80)}`);
+      } catch {
+        // Fallback gracefully to subsequent model or verified regional circular deals
       }
     }
 
-    const groundedDeals = parseJsonFromText<DealItem[]>(response?.text || '', []);
+    const groundedDeals = response?.text ? parseJsonFromText<DealItem[]>(response.text, []) : [];
 
     let nonKarnsDeals: DealItem[] = [];
     if (Array.isArray(groundedDeals) && groundedDeals.length > 0) {
@@ -462,7 +465,7 @@ Requirements for each extracted item:
 17. "inStock": true.
 `;
 
-  const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+  const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
   let response;
   for (let i = 0; i < modelsToTry.length; i++) {
     try {
@@ -484,14 +487,12 @@ Requirements for each extracted item:
         },
       });
       if (response?.text) break;
-    } catch (err: any) {
-      const status = err?.status || err?.code || '';
-      console.warn(`[GeminiService] Flyer OCR model ${modelsToTry[i]} note: ${status}`);
-      if (i === modelsToTry.length - 1) throw err;
+    } catch {
+      // Fall back to subsequent model tier
     }
   }
 
-  const parsed = JSON.parse(response?.text || '[]') as DealItem[];
+  const parsed = response?.text ? parseJsonFromText<DealItem[]>(response.text, []) : [];
 
   return parsed.map((item, idx) => ({
     ...item,
@@ -541,7 +542,7 @@ Evaluation Criteria:
 3. Compare quality tiers (Organic/Grass-fed vs Conventional).
 `;
 
-    const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
     let response;
     for (let i = 0; i < modelsToTry.length; i++) {
       try {
@@ -555,20 +556,19 @@ Evaluation Criteria:
           },
         });
         if (response?.text) break;
-      } catch (err: any) {
-        const status = err?.status || err?.code || '';
-        console.warn(`[GeminiService] AI comparison model ${modelsToTry[i]} note: ${status}`);
+      } catch {
+        // Fall back to subsequent model tier
       }
     }
 
     if (response?.text) {
-      const parsed = JSON.parse(response.text) as AIComparisonResult;
-      if (parsed.bestDealId && parsed.verdict) {
+      const parsed = parseJsonFromText<AIComparisonResult | null>(response.text, null);
+      if (parsed && parsed.bestDealId && parsed.verdict) {
         return parsed;
       }
     }
-  } catch (error) {
-    console.warn('[GeminiService] AI deal comparison notice, utilizing deterministic calculations.');
+  } catch {
+    // Utilize deterministic fallback
   }
 
   return generateDeterministicComparison(productGroupName, deals);
