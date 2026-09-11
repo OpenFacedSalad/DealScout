@@ -20,6 +20,7 @@ import ShoppingListView from './components/ShoppingListView';
 import DocViewerModal from './components/DocViewerModal';
 import InstallBanner from './components/InstallBanner';
 import FlyerUploadModal from './components/FlyerUploadModal';
+import NotificationOptInBanner from './components/NotificationOptInBanner';
 
 const STORAGE_KEY_LOCATION = 'grocery_circulars_location_v2';
 const STORAGE_KEY_RADIUS = 'grocery_circulars_radius_v2';
@@ -332,6 +333,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased">
+      <NotificationOptInBanner />
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}

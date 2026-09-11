@@ -10,11 +10,20 @@ export default function InstallBanner() {
     isDismissed,
     dismissPrompt,
     triggerInstall,
+    openManualInstallGuide,
+    showInstallGuide,
+    hideInstallGuide,
   } = usePWAInstall();
-  const [showIOSGuide, setShowIOSGuide] = useState(false);
 
   if (isStandalone || isDismissed) return null;
-  if (!isInstallable && !isIOS) return null;
+
+  const handleInstallClick = async () => {
+    if (isIOS) {
+      showInstallGuide();
+    } else {
+      await triggerInstall();
+    }
+  };
 
   return (
     <aside aria-label="Install DealScout" className="fixed bottom-4 left-4 right-4 z-50 max-w-lg mx-auto animate-in fade-in slide-in-from-bottom-3 duration-200">
@@ -35,7 +44,7 @@ export default function InstallBanner() {
 
         <div className="flex items-center space-x-2 shrink-0">
           <button
-            onClick={() => (isIOS ? setShowIOSGuide(true) : triggerInstall())}
+            onClick={handleInstallClick}
             className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center space-x-1.5 shadow-sm"
           >
             <Download className="w-3.5 h-3.5" />
@@ -52,24 +61,33 @@ export default function InstallBanner() {
         </div>
       </div>
 
-      {showIOSGuide && (
+      {openManualInstallGuide && (
         <div className="mt-2 bg-white text-slate-900 p-3.5 rounded-xl shadow-lg border border-slate-200 text-xs animate-in fade-in duration-150">
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center space-x-2 font-bold text-slate-800">
               <Share className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>To install on iOS:</span>
+              <span>To install {isIOS ? 'on iOS' : 'manually'}:</span>
             </div>
             <button
-              onClick={() => setShowIOSGuide(false)}
+              onClick={hideInstallGuide}
               className="text-slate-400 hover:text-slate-600"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
           <ol className="mt-1.5 pl-5 list-decimal text-slate-600 space-y-1 text-[11px]">
-            <li>Tap Safari's <strong>Share</strong> button in the menu bar.</li>
-            <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
-            <li>Tap <strong>Add</strong> in the top-right corner.</li>
+            {isIOS ? (
+              <>
+                <li>Tap Safari's <strong>Share</strong> button.</li>
+                <li>Tap <strong>Add to Home Screen</strong>.</li>
+                <li>Tap <strong>Add</strong>.</li>
+              </>
+            ) : (
+              <>
+                <li>Tap browser menu (⋮).</li>
+                <li>Tap <strong>Install app</strong>.</li>
+              </>
+            )}
           </ol>
         </div>
       )}

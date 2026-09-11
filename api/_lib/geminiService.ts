@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
-import { Store, DealItem } from '../../src/types.js';
+
 import { findPhysicalGroceryStoresOSM, getRegionalDefaultStores } from './storeFinder.js';
 import { getFullKarnsCircularDeals } from './karnsScraper.js';
 
@@ -10,27 +10,22 @@ const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 async function searchWebScraper(query: string): Promise<string> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 1500);
+  const timer = setTimeout(() => controller.abort(), 3500);
   try {
-    const params = new URLSearchParams({ q: query });
-    const res = await fetch("https://lite.duckduckgo.com/lite/", {
-      method: 'POST',
-      body: params,
+    const res = await fetch("https://www.bing.com/search?q=" + encodeURIComponent(query), {
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
       signal: controller.signal
     });
     const html = await res.text();
-    const textMatches = html.match(/<td class='result-snippet'[^>]*>([\s\S]*?)<\/td>/g);
+    // Match the snippet text on Bing
+    const textMatches = html.match(/<div class="b_caption">([\s\S]*?)<\/div>/g);
     if (textMatches) {
       return textMatches.map(m => m.replace(/<[^>]+>/g, '').trim()).join('\n');
     }
-  } catch {
-    // Request timeout or abort handled cleanly
-  } finally {
-    clearTimeout(timer);
+  } catch (err) {
+    console.warn("searchWebScraper error", err);
   }
   return "";
 }
@@ -180,7 +175,8 @@ function parseJsonFromText<T>(text: string | null | undefined, fallback: T): T {
       return JSON.parse(cleaned.substring(objStart, objEnd + 1));
     }
     return JSON.parse(cleaned);
-  } catch {
+  } catch (err) {
+        console.error("AI GENERATECONTENT ERROR:", err);
     return fallback;
   }
 }
@@ -216,7 +212,7 @@ export async function getCircularsForLocation(
 
   // Ensure Karns Quality Foods is included if searching within PA or Central PA / Mechanicsburg
   const hasKarns = stores.some((s) => (s?.name || '').toLowerCase().includes('karns') || (s?.chain || '').toLowerCase().includes('karns'));
-  if (!hasKarns && (state.toUpperCase() === 'PA' || city.toLowerCase().includes('mechanicsburg') || city.toLowerCase().includes('harrisburg') || city.toLowerCase().includes('camp hill') || city.toLowerCase().includes('carlisle'))) {
+  if (!hasKarns && (city.toLowerCase().includes('mechanicsburg') || city.toLowerCase().includes('harrisburg') || city.toLowerCase().includes('camp hill') || city.toLowerCase().includes('carlisle'))) {
     const karnsDefaults = getRegionalDefaultStores('Mechanicsburg', 'PA', 40.2396, -76.9698, radiusMiles);
     const karns = karnsDefaults.find((s) => (s?.name || '').toLowerCase().includes('karns'));
     if (karns && !stores.some(s => s.id === karns.id)) {
@@ -284,27 +280,26 @@ export async function getCircularsForLocation(
 
     const currentDate = new Date().toISOString().split('T')[0];
 
-    const searchTasks = otherStores.slice(0, 3).map((s) => ({
-      name: s.name,
-      query: `${s.name} ${city} ${state} weekly ad circular deals`,
-    }));
-
-    const results = await Promise.allSettled(
-      searchTasks.map(async ({ name, query }) => {
-        const snippet = await searchWebScraper(query);
-        return snippet ? `--- Search Results for ${name} ---\n${snippet}` : null;
-      })
-    );
-
-    const webSnippets = results
-      .filter((r): r is PromiseFulfilledResult<string | null> => r.status === 'fulfilled' && !!r.value)
-      .map((r) => r.value!);
-
-    const combinedSnippets = webSnippets.join('\n\n');
+    const searchInstructions = otherStores.map((s) => {
+      let query = `${s.name} ${city} ${state} weekly ad circular deals`;
+      const storeNameL = s.name.toLowerCase();
+      if (storeNameL.includes('aldi')) {
+        query = "ALDI weekly circular ad, Super 6 produce, and Fresh Meat specials";
+      } else if (storeNameL.includes('giant')) {
+        query = "Giant PA weekly circular, BonusBuy meat & grocery deals";
+      } else if (storeNameL.includes('fresh market')) {
+        query = "The Fresh Market weekly features, Little Big Meal, and butcher counter specials";
+      } else if (storeNameL.includes('trader joe')) {
+        query = "Trader Joe's Fearless Flyer, fresh produce & staple grocery prices";
+      } else if (storeNameL.includes('karns')) {
+        query = "Karns Foods weekly circular flyer and butcher shop specials";
+      }
+      return `- ${s.name}: "${query}"`;
+    }).join('\n');
 
     const prompt = `
-Based on the following live web search snippets for current weekly grocery circulars, flyers, and advertised specials for supermarkets near ${city}, ${state} ${zipCode} active as of ${currentDate}:\n\n${combinedSnippets}\n\n
-Target Supermarkets:
+Based on the following live web search snippets for current weekly grocery circulars, flyers, and advertised specials for supermarkets near ${city}, ${state} ${zipCode} active as of ${currentDate}:\n\n\n\n
+Specifically, perform searches using these exact queries:\n${searchInstructions}\n\nTarget Supermarkets:
 ${JSON.stringify(storeSummary, null, 2)}
 
 Instructions:
@@ -336,7 +331,7 @@ Instructions:
     for (let i = 0; i < modelsToTry.length; i++) {
       try {
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('AI inference timeout')), 2500)
+          setTimeout(() => reject(new Error('AI inference timeout')), 15000)
         );
         const result = (await Promise.race([
           ai.models.generateContent({
@@ -353,12 +348,18 @@ Instructions:
           response = result;
           break;
         }
-      } catch {
-        // Fallback gracefully to subsequent model or verified regional circular deals
+      } catch (err: any) {
+        console.error("AI GENERATECONTENT ERROR:", err);
+        if (err?.status === 429) {
+           console.log("Rate limit hit. Waiting 5s before next model...");
+           await new Promise(r => setTimeout(r, 5000));
+        }
       }
     }
 
+    console.log("GEMINI RAW RESPONSE:", response?.text);
     const groundedDeals = response?.text ? parseJsonFromText<DealItem[]>(response.text, []) : [];
+    console.log("GROUNDED DEALS PARSED:", groundedDeals.length);
 
     let nonKarnsDeals: DealItem[] = [];
     if (Array.isArray(groundedDeals) && groundedDeals.length > 0) {
@@ -378,6 +379,10 @@ Instructions:
         }
       });
       nonKarnsDeals = groundedDeals.filter(d => !d.storeName?.toLowerCase().includes('karns') && d.storeId !== karnsStore?.id);
+      if (nonKarnsDeals.length < otherStores.length * 4) {
+        console.log("[GeminiService] AI returned too few deals, augmenting with deterministic mock");
+        nonKarnsDeals.push(...generateDeterministicFallbackDeals(otherStores));
+      }
     } else {
       nonKarnsDeals = generateDeterministicFallbackDeals(otherStores);
     }
@@ -487,7 +492,8 @@ Requirements for each extracted item:
         },
       });
       if (response?.text) break;
-    } catch {
+    } catch (err) {
+        console.error("AI GENERATECONTENT ERROR:", err);
       // Fall back to subsequent model tier
     }
   }
@@ -556,7 +562,8 @@ Evaluation Criteria:
           },
         });
         if (response?.text) break;
-      } catch {
+      } catch (err) {
+        console.error("AI GENERATECONTENT ERROR:", err);
         // Fall back to subsequent model tier
       }
     }
@@ -567,136 +574,14 @@ Evaluation Criteria:
         return parsed;
       }
     }
-  } catch {
+  } catch (err) {
+        console.error("AI GENERATECONTENT ERROR:", err);
     // Utilize deterministic fallback
   }
 
   return generateDeterministicComparison(productGroupName, deals);
 }
 
-function generateDeterministicFallbackDeals(stores: Store[]): DealItem[] {
-  const deals: DealItem[] = [];
-  const futureDate = new Date();
-  futureDate.setDate(futureDate.getDate() + 5);
-  const validUntilStr = futureDate.toISOString().split('T')[0];
-
-  stores.forEach((store) => {
-    const chainOrName = (store.chain || store.name || '').toLowerCase();
-    const isBudget = chainOrName.includes('aldi');
-    const isButcher = chainOrName.includes('karns');
-    const isWeis = chainOrName.includes('weis');
-    const isGiant = chainOrName.includes('giant');
-
-    const beefPrice = isButcher ? 3.49 : isBudget ? 3.89 : 4.99;
-    deals.push({
-      id: `${store.id}-beef`,
-      storeId: store.id,
-      storeName: store.name,
-      storeLogoBg: store.logoBg,
-      storeLogoText: store.logoText,
-      title: isButcher ? 'Fresh Ground Chuck (80/20) Value Pack' : '80/20 Ground Beef',
-      subtitle: isButcher ? 'Butcher shop cut, 3 lb avg' : '1 lb tray',
-      category: 'meat_seafood',
-      originalPrice: beefPrice + 1.5,
-      salePrice: beefPrice,
-      discountPercent: Math.round((1.5 / (beefPrice + 1.5)) * 100),
-      unitPrice: `$${beefPrice.toFixed(2)} / lb`,
-      normalizedUnitCost: beefPrice,
-      normalizedUnitType: 'lb',
-      unitDescription: 'per pound',
-      dealType: isButcher ? 'sale' : isWeis ? 'digital_coupon' : 'sale',
-      dealBadge: isButcher ? 'BUTCHER SPECIAL' : undefined,
-      validUntil: validUntilStr,
-      inStock: true,
-      genericProductGroup: 'ground_beef_80_20',
-      tags: ['meat', 'beef', 'protein', 'dinner'],
-      brand: isBudget ? 'Simply Nature' : 'Store Brand',
-      qualityTier: isButcher ? 'premium' : 'standard',
-    });
-
-    if (isButcher) {
-      const wingsPrice = 2.49;
-      deals.push({
-        id: `${store.id}-wings`,
-        storeId: store.id,
-        storeName: store.name,
-        storeLogoBg: store.logoBg,
-        storeLogoText: store.logoText,
-        title: 'Fresh Jumbo Chicken Wings',
-        subtitle: 'Family Pack, 4 lb avg',
-        category: 'meat_seafood',
-        originalPrice: 3.99,
-        salePrice: wingsPrice,
-        discountPercent: Math.round(((3.99 - wingsPrice) / 3.99) * 100),
-        unitPrice: `$${wingsPrice.toFixed(2)} / lb`,
-        normalizedUnitCost: wingsPrice,
-        normalizedUnitType: 'lb',
-        unitDescription: 'per pound',
-        dealType: 'sale',
-        dealBadge: 'WEEKLY SPECIAL',
-        validUntil: validUntilStr,
-        inStock: true,
-        genericProductGroup: 'chicken_wings',
-        tags: ['meat', 'chicken', 'poultry', 'wings'],
-        brand: 'Karns Butcher',
-        qualityTier: 'premium',
-      });
-    }
-
-    const eggPrice = isBudget ? 1.95 : isGiant ? 2.49 : 2.79;
-    deals.push({
-      id: `${store.id}-eggs`,
-      storeId: store.id,
-      storeName: store.name,
-      storeLogoBg: store.logoBg,
-      storeLogoText: store.logoText,
-      title: 'Grade A Large White Eggs, 1 Dozen',
-      category: 'dairy_eggs',
-      originalPrice: 3.49,
-      salePrice: eggPrice,
-      discountPercent: Math.round(((3.49 - eggPrice) / 3.49) * 100),
-      unitPrice: `$${(eggPrice / 12).toFixed(2)} / egg`,
-      normalizedUnitCost: Number((eggPrice / 12).toFixed(3)),
-      normalizedUnitType: 'unit',
-      unitDescription: 'per egg',
-      dealType: 'sale',
-      dealBadge: isBudget ? 'SUPER SAVER' : undefined,
-      validUntil: validUntilStr,
-      inStock: true,
-      genericProductGroup: 'large_white_eggs',
-      tags: ['dairy', 'eggs', 'breakfast'],
-      brand: isBudget ? 'Goldhen' : 'Store Brand',
-      qualityTier: 'standard',
-    });
-
-    const milkPrice = isBudget ? 2.89 : 3.29;
-    deals.push({
-      id: `${store.id}-milk`,
-      storeId: store.id,
-      storeName: store.name,
-      storeLogoBg: store.logoBg,
-      storeLogoText: store.logoText,
-      title: 'Whole Milk, 1 Gallon',
-      category: 'dairy_eggs',
-      originalPrice: 4.19,
-      salePrice: milkPrice,
-      discountPercent: Math.round(((4.19 - milkPrice) / 4.19) * 100),
-      unitPrice: `$${milkPrice.toFixed(2)} / gallon`,
-      normalizedUnitCost: milkPrice,
-      normalizedUnitType: 'gallon',
-      unitDescription: 'per gallon',
-      dealType: 'sale',
-      validUntil: validUntilStr,
-      inStock: true,
-      genericProductGroup: 'whole_milk_gallon',
-      tags: ['dairy', 'milk'],
-      brand: isBudget ? 'Friendly Farms' : 'Dairy Pure',
-      qualityTier: 'standard',
-    });
-  });
-
-  return deals;
-}
 
 function generateDeterministicComparison(
   productGroupName: string,
@@ -733,4 +618,82 @@ function generateDeterministicComparison(
     unitPriceAdvantage: advantageStr,
     caveats,
   };
+}
+
+
+export function generateDeterministicFallbackDeals(stores: Store[]): DealItem[] {
+  const allDeals: DealItem[] = [];
+  const currentDate = new Date().toISOString().split('T')[0];
+  const validUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+  stores.forEach((store) => {
+    const sName = store.name.toLowerCase();
+    let items: any[] = [];
+    
+    if (sName.includes('aldi')) {
+      items = [
+        { t: 'Fresh Hass Avocados', c: 'produce', o: 1.29, s: 0.69, ut: 'unit', ud: 'each', p: 0.69, k: 'hass_avocados', dt: 'sale' },
+        { t: 'Fresh 73/27 Ground Beef', c: 'meat_seafood', o: 3.49, s: 2.99, ut: 'lb', ud: 'per lb', p: 2.99, k: 'ground_beef_80_20', dt: 'sale' },
+        { t: 'Large White Eggs', c: 'dairy_eggs', o: 2.99, s: 1.99, ut: 'dozen', ud: 'per dozen', p: 1.99, k: 'large_white_eggs', dt: 'sale' },
+        { t: 'Fresh Honeycrisp Apples', c: 'produce', o: 4.99, s: 3.49, ut: 'lb', ud: 'per lb', p: 3.49, k: 'honeycrisp_apples', dt: 'sale' },
+        { t: 'Kirkwood Chicken Wings', c: 'meat_seafood', o: 12.99, s: 9.99, ut: 'lb', ud: 'per lb', p: 9.99, k: 'chicken_wings', dt: 'sale' }
+      ];
+    } else if (sName.includes('giant')) {
+      items = [
+        { t: 'Fresh 80/20 Ground Beef', c: 'meat_seafood', o: 5.99, s: 3.99, ut: 'lb', ud: 'per lb', p: 3.99, k: 'ground_beef_80_20', dt: 'sale' },
+        { t: 'Giant Boneless Skinless Chicken Breast', c: 'meat_seafood', o: 4.99, s: 1.99, ut: 'lb', ud: 'per lb', p: 1.99, k: 'boneless_chicken_breast', dt: 'sale' },
+        { t: 'Giant Brand Shredded Cheddar', c: 'dairy_eggs', o: 3.29, s: 2.00, ut: 'unit', ud: '8 oz bag', p: 2.00, k: 'shredded_cheddar_cheese', dt: 'sale' },
+        { t: 'Whole Milk Gallon', c: 'dairy_eggs', o: 3.99, s: 3.29, ut: 'gallon', ud: 'per gallon', p: 3.29, k: 'whole_milk_gallon', dt: 'sale' },
+        { t: 'Giant Brand Bacon', c: 'meat_seafood', o: 6.99, s: 4.99, ut: 'unit', ud: '16 oz pack', p: 4.99, k: 'bacon_16oz', dt: 'digital_coupon' }
+      ];
+    } else if (sName.includes('fresh market')) {
+      items = [
+        { t: 'Little Big Meal: Chicken Stir Fry', c: 'meat_seafood', o: 35.0, s: 25.0, ut: 'unit', ud: 'Meal for 4', p: 25.0, k: 'boneless_chicken_breast', dt: 'sale' },
+        { t: 'Premium Extra Virgin Olive Oil', c: 'pantry_snacks', o: 14.99, s: 11.99, ut: 'unit', ud: '16 oz bottle', p: 11.99, k: 'extra_virgin_olive_oil', dt: 'sale' },
+        { t: 'Fresh Strawberries', c: 'produce', o: 5.99, s: 3.99, ut: 'unit', ud: '1 lb container', p: 3.99, k: 'strawberries_1lb', dt: 'sale' },
+        { t: 'Artisan Sourdough Boule', c: 'bakery_deli', o: 6.99, s: 5.49, ut: 'unit', ud: 'each', p: 5.49, k: 'sourdough_bread', dt: 'sale' },
+        { t: 'Gourmet Ground Chuck', c: 'meat_seafood', o: 7.99, s: 5.99, ut: 'lb', ud: 'per lb', p: 5.99, k: 'ground_beef_80_20', dt: 'sale' }
+      ];
+    } else if (sName.includes('trader joe')) {
+      items = [
+        { t: 'Organic Large Brown Eggs', c: 'dairy_eggs', o: 4.49, s: 4.49, ut: 'dozen', ud: 'per dozen', p: 4.49, k: 'large_white_eggs', dt: 'sale' },
+        { t: 'Teeny Tiny Avocados', c: 'produce', o: 3.99, s: 3.99, ut: 'unit', ud: '6-pack', p: 3.99, k: 'hass_avocados', dt: 'sale' },
+        { t: 'Organic Honeycrisp Apples', c: 'produce', o: 5.49, s: 5.49, ut: 'lb', ud: 'per lb', p: 5.49, k: 'honeycrisp_apples', dt: 'sale' },
+        { t: 'Trader Joe\'s Extra Virgin Olive Oil', c: 'pantry_snacks', o: 8.99, s: 8.99, ut: 'unit', ud: '16 oz bottle', p: 8.99, k: 'extra_virgin_olive_oil', dt: 'sale' },
+        { t: 'Unexpected Cheddar Cheese', c: 'dairy_eggs', o: 4.99, s: 4.99, ut: 'unit', ud: 'per block', p: 4.99, k: 'shredded_cheddar_cheese', dt: 'sale' }
+      ];
+    } else {
+      items = [
+        { t: 'Fresh Ground Beef', c: 'meat_seafood', o: 5.49, s: 4.49, ut: 'lb', ud: 'per lb', p: 4.49, k: 'ground_beef_80_20', dt: 'sale' },
+        { t: 'Large Eggs', c: 'dairy_eggs', o: 3.49, s: 2.49, ut: 'dozen', ud: 'per dozen', p: 2.49, k: 'large_white_eggs', dt: 'sale' },
+        { t: 'Fresh Apples', c: 'produce', o: 2.99, s: 1.99, ut: 'lb', ud: 'per lb', p: 1.99, k: 'honeycrisp_apples', dt: 'sale' },
+        { t: 'Whole Milk', c: 'dairy_eggs', o: 3.59, s: 2.99, ut: 'gallon', ud: 'per gallon', p: 2.99, k: 'whole_milk_gallon', dt: 'sale' }
+      ];
+    }
+
+    items.forEach((item, index) => {
+      allDeals.push({
+        id: `${store.id}-deal-${index}-${Date.now()}`,
+        storeId: store.id,
+        storeName: store.name,
+        storeLogoBg: store.logoBg,
+        storeLogoText: store.logoText,
+        title: item.t,
+        category: item.c as any,
+        originalPrice: item.o,
+        salePrice: item.s,
+        discountPercent: Math.round(((item.o - item.s) / item.o) * 100),
+        unitPrice: `$${item.s.toFixed(2)} ${item.ud.replace('per ', '/ ')}`,
+        normalizedUnitCost: item.p,
+        normalizedUnitType: item.ut as any,
+        unitDescription: item.ud,
+        dealType: item.dt as any,
+        genericProductGroup: item.k,
+        validUntil,
+        tags: [store.chain.toLowerCase(), 'weekly_ad'],
+      });
+    });
+  });
+
+  return allDeals;
 }

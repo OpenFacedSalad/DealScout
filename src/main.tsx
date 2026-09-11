@@ -5,26 +5,19 @@ import './index.css';
 import ErrorBoundary from './components/ErrorBoundary';
 import { initSyncFallbackListeners } from './utils/syncQueue';
 
-// Safely clean up and unregister any service workers and caches to prevent white-screen issues
+// Register service worker
 try {
-  if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-    navigator.serviceWorker.getRegistrations().then((registrations) => {
-      for (const reg of registrations) {
-        reg.unregister().then(() => {
-          console.log('[PWA] Unregistered service worker:', reg.scope);
-        });
-      }
-    }).catch(() => {});
-    if ('caches' in window) {
-      caches.keys().then((keys) => {
-        for (const key of keys) {
-          caches.delete(key);
-        }
-      }).catch(() => {});
-    }
+  if ('serviceWorker' in navigator && (import.meta.env.PROD || window.location.protocol === 'https:')) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').then((reg) => {
+        console.log('[PWA] Service worker registered:', reg.scope);
+      }).catch((e) => {
+        console.warn('[PWA] Service worker registration failed:', e);
+      });
+    });
   }
 } catch (e) {
-  console.warn('[PWA] Service Worker cleanup non-fatal error:', e);
+  console.warn('[PWA] Service Worker registration non-fatal error:', e);
 }
 
 // Initialize sync listeners safely in background

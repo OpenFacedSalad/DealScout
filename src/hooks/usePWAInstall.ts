@@ -16,6 +16,7 @@ export function usePWAInstall() {
   const [isIOS, setIsIOS] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
   const [isDismissed, setIsDismissed] = useState(false);
+  const [openManualInstallGuide, setOpenManualInstallGuide] = useState(false);
 
   useEffect(() => {
     try {
@@ -62,8 +63,19 @@ export function usePWAInstall() {
     setIsDismissed(true);
   }, []);
 
-  const triggerInstall = async (): Promise<'accepted' | 'dismissed' | null> => {
-    if (!installPrompt) return null;
+  const showInstallGuide = useCallback(() => {
+    setOpenManualInstallGuide(true);
+  }, []);
+
+  const hideInstallGuide = useCallback(() => {
+    setOpenManualInstallGuide(false);
+  }, []);
+
+  const triggerInstall = async (): Promise<'accepted' | 'dismissed' | 'manual' | null> => {
+    if (!installPrompt) {
+      showInstallGuide();
+      return 'manual';
+    }
 
     try {
       await installPrompt.prompt();
@@ -80,7 +92,8 @@ export function usePWAInstall() {
       return outcome;
     } catch (e) {
       console.warn('[PWA] triggerInstall error:', e);
-      return null;
+      showInstallGuide();
+      return 'manual';
     }
   };
 
@@ -89,6 +102,9 @@ export function usePWAInstall() {
     isIOS,
     isStandalone,
     isDismissed,
+    openManualInstallGuide,
+    showInstallGuide,
+    hideInstallGuide,
     dismissPrompt,
     triggerInstall,
   };

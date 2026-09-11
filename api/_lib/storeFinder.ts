@@ -23,6 +23,23 @@ geocodeCache.set('mechanicsburg, pa', {
   formattedAddress: 'Mechanicsburg, PA 17050, USA',
 });
 
+geocodeCache.set('19044', {
+  lat: 40.1789,
+  lng: -75.1432,
+  city: 'Horsham',
+  state: 'PA',
+  zipCode: '19044',
+  formattedAddress: 'Horsham, PA 19044, USA',
+});
+geocodeCache.set('horsham, pa', {
+  lat: 40.1789,
+  lng: -75.1432,
+  city: 'Horsham',
+  state: 'PA',
+  zipCode: '19044',
+  formattedAddress: 'Horsham, PA 19044, USA',
+});
+
 export function calculateDistanceInMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const EARTH_RADIUS_MILES = 3958.8;
   const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
@@ -115,6 +132,16 @@ export async function geocodeQuery(query: string): Promise<{
     console.warn(`[storeFinder] Geocode failed for "${query}", checking fallback:`, error);
     if (normalizedQuery.includes('17050') || normalizedQuery.includes('mechanicsburg')) {
       const fallback = geocodeCache.get('17050')!;
+      return {
+        latitude: fallback.lat,
+        longitude: fallback.lng,
+        city: fallback.city,
+        state: fallback.state,
+        zipCode: fallback.zipCode,
+        formattedAddress: fallback.formattedAddress,
+      };
+    } else if (normalizedQuery.includes('19044') || normalizedQuery.includes('horsham')) {
+      const fallback = geocodeCache.get('19044')!;
       return {
         latitude: fallback.lat,
         longitude: fallback.lng,
@@ -316,7 +343,56 @@ export function getRegionalDefaultStores(
     hours: string;
   }> = [];
 
-  if (normalizedState === 'PA' || city.toLowerCase().includes('mechanicsburg')) {
+  const cityLower = city.toLowerCase();
+  
+  if (normalizedState === 'PA' && (cityLower.includes('horsham') || cityLower.includes('willow grove') || cityLower.includes('hatboro') || cityLower.includes('montgomeryville') || userLat > 40.1 && userLat < 40.25 && userLng > -75.25 && userLng < -75.1)) {
+    candidateTemplates = [
+      {
+        name: 'Giant Food Stores',
+        chain: 'Giant Food Stores',
+        address: '314 Horsham Rd',
+        city: 'Horsham',
+        state: 'PA',
+        zip: '19044',
+        lat: 40.1789,
+        lng: -75.1432,
+        hours: '6:00 AM - 11:00 PM',
+      },
+      {
+        name: 'ALDI',
+        chain: 'ALDI',
+        address: '277 N York Rd',
+        city: 'Hatboro',
+        state: 'PA',
+        zip: '19040',
+        lat: 40.1834,
+        lng: -75.1057,
+        hours: '9:00 AM - 8:00 PM',
+      },
+      {
+        name: 'Trader Joe\'s',
+        chain: 'Trader Joe\'s',
+        address: '1460 Bethlehem Pike',
+        city: 'North Wales',
+        state: 'PA',
+        zip: '19454',
+        lat: 40.2223,
+        lng: -75.2341,
+        hours: '8:00 AM - 9:00 PM',
+      },
+      {
+        name: 'The Fresh Market',
+        chain: 'The Fresh Market',
+        address: '165 Welsh Rd',
+        city: 'Horsham',
+        state: 'PA',
+        zip: '19044',
+        lat: 40.1882,
+        lng: -75.1763,
+        hours: '8:00 AM - 9:00 PM',
+      },
+    ];
+  } else if (normalizedState === 'PA' && (cityLower.includes('mechanicsburg') || userLat > 40.1 && userLat < 40.3 && userLng > -77.1 && userLng < -76.9)) {
     candidateTemplates = [
       {
         name: 'Karns Quality Foods',
@@ -372,28 +448,6 @@ export function getRegionalDefaultStores(
         lat: 40.2431,
         lng: -77.0094,
         hours: '6:00 AM - Midnight',
-      },
-      {
-        name: 'Trader Joe\'s',
-        chain: 'Trader Joe\'s',
-        address: '3446 Simpson Ferry Rd',
-        city: 'Camp Hill',
-        state: 'PA',
-        zip: '17011',
-        lat: 40.2312,
-        lng: -76.9312,
-        hours: '8:00 AM - 9:00 PM',
-      },
-      {
-        name: 'Target Grocery',
-        chain: 'Target Grocery',
-        address: '6416 Carlisle Pike Ste 100',
-        city: 'Mechanicsburg',
-        state: 'PA',
-        zip: '17050',
-        lat: 40.2425,
-        lng: -77.0088,
-        hours: '8:00 AM - 10:00 PM',
       },
     ];
   } else if (normalizedState === 'TX') {

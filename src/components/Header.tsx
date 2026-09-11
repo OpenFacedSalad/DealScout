@@ -54,11 +54,18 @@ export default function Header({
   onOpenDocViewer,
 }: HeaderProps) {
   const [isDocDropdownOpen, setIsDocDropdownOpen] = useState(false);
-  const [showIOSModal, setShowIOSModal] = useState(false);
   const docDropdownRef = useRef<HTMLDivElement>(null);
 
   const isOnline = useNetworkStatus();
-  const { isInstallable, isIOS, isStandalone, triggerInstall } = usePWAInstall();
+  const {
+    isInstallable,
+    isIOS,
+    isStandalone,
+    openManualInstallGuide,
+    showInstallGuide,
+    hideInstallGuide,
+    triggerInstall,
+  } = usePWAInstall();
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -72,7 +79,7 @@ export default function Header({
 
   const handleInstallClick = async () => {
     if (isIOS) {
-      setShowIOSModal(true);
+      showInstallGuide();
     } else {
       await triggerInstall();
     }
@@ -174,7 +181,7 @@ export default function Header({
               ))}
             </div>
 
-            {!isStandalone && (isInstallable || isIOS) && (
+            {!isStandalone && (
               <button
                 onClick={handleInstallClick}
                 className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition shadow-xs"
@@ -312,16 +319,16 @@ export default function Header({
         </div>
       </div>
 
-      {showIOSModal && (
+      {openManualInstallGuide && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
           <div className="bg-white max-w-sm w-full p-5 rounded-2xl shadow-xl border border-slate-200 text-xs">
             <div className="flex items-start justify-between gap-2 mb-3">
               <div className="flex items-center space-x-2 font-black text-slate-900 text-sm">
                 <Share className="w-4 h-4 text-emerald-600" />
-                <span>Install DealScout on iOS</span>
+                <span>Install DealScout</span>
               </div>
               <button
-                onClick={() => setShowIOSModal(false)}
+                onClick={hideInstallGuide}
                 className="text-slate-400 hover:text-slate-600 p-1"
                 aria-label="Close dialog"
               >
@@ -329,21 +336,39 @@ export default function Header({
               </button>
             </div>
             <p className="text-slate-600 mb-3">
-              Safari does not support automatic prompts. You can add the app directly from your browser menu:
+              {isIOS
+                ? "Safari does not support automatic prompts. You can add the app directly from your browser menu:"
+                : "Your browser requires you to install manually from the menu:"}
             </p>
             <ol className="list-decimal pl-5 space-y-1.5 text-slate-700 font-medium">
-              <li>
-                Tap the <strong className="text-slate-900">Share</strong> icon at the bottom of Safari.
-              </li>
-              <li>
-                Scroll down the share sheet and tap <strong className="text-slate-900">Add to Home Screen</strong>.
-              </li>
-              <li>
-                Tap <strong className="text-emerald-600">Add</strong> in the top-right corner.
-              </li>
+              {isIOS ? (
+                <>
+                  <li>
+                    Tap the <strong className="text-slate-900">Share</strong> icon at the bottom of Safari.
+                  </li>
+                  <li>
+                    Scroll down the share sheet and tap <strong className="text-slate-900">Add to Home Screen</strong>.
+                  </li>
+                  <li>
+                    Tap <strong className="text-emerald-600">Add</strong> in the top-right corner.
+                  </li>
+                </>
+              ) : (
+                <>
+                  <li>
+                    Tap the <strong className="text-slate-900">Browser Menu</strong> icon (⋮) in the top right.
+                  </li>
+                  <li>
+                    Tap <strong className="text-slate-900">Install app</strong> or <strong className="text-slate-900">Add to Home screen</strong>.
+                  </li>
+                  <li>
+                    Tap <strong className="text-emerald-600">Install</strong> to confirm.
+                  </li>
+                </>
+              )}
             </ol>
             <button
-              onClick={() => setShowIOSModal(false)}
+              onClick={hideInstallGuide}
               className="mt-4 w-full py-2 bg-slate-900 text-white font-bold rounded-xl text-center"
             >
               Got it
