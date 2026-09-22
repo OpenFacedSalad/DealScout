@@ -1,4 +1,4 @@
-export type DealCategory =
+export type CategoryType =
   | 'produce'
   | 'meat_seafood'
   | 'dairy_eggs'
@@ -7,6 +7,8 @@ export type DealCategory =
   | 'frozen'
   | 'beverages'
   | 'household';
+
+export type DealCategory = CategoryType;
 
 export type DealType =
   | 'sale'
@@ -67,6 +69,7 @@ export interface DealItem {
   category: DealCategory;
   originalPrice: number;
   salePrice: number;
+  displayPrice?: string | null;
   discountPercent: number;
   unitPrice: string;
   normalizedUnitCost: number;

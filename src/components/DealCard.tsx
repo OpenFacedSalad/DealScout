@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Check } from 'lucide-react';
+import { ShoppingBag, Tag, Sparkles, Check, Plus } from 'lucide-react';
 import { DealItem } from '../types';
 
 interface DealCardProps {
@@ -21,36 +21,6 @@ export default function DealCard({
   competingCount,
   onOpenComparison,
 }: DealCardProps) {
-  const ocrText = deal.ocrTranscript || '';
-  const badgeText = deal.promoBadgeText || deal.dealBadge || '';
-  const searchString = `${ocrText} ${deal.title || ''} ${badgeText}`.trim();
-
-  // 1. Dynamic Multi-Buy Calculation (Mathematically handles any X for $Y)
-  let unitPrice = deal.salePrice;
-  let multiBuySubtitle: string | null = null;
-
-  if (deal.bundleQuantity && deal.bundleQuantity > 1 && (deal as any).bundleTotalPrice) {
-    unitPrice = Number(((deal as any).bundleTotalPrice / deal.bundleQuantity).toFixed(2));
-    multiBuySubtitle = `${deal.bundleQuantity} for $${(deal as any).bundleTotalPrice.toFixed(2)} ($${unitPrice.toFixed(2)} ea)`;
-  } else {
-    const match = searchString.match(/(\d+)\s*(?:for|\/)\s*\$?(\d+(?:\.\d{2})?)/i);
-    if (match) {
-      const qty = parseInt(match[1], 10);
-      const total = parseFloat(match[2]);
-      if (qty > 1 && total > 0) {
-        unitPrice = Number((total / qty).toFixed(2));
-        multiBuySubtitle = `${qty} for $${total.toFixed(2)} ($${unitPrice.toFixed(2)} ea)`;
-      }
-    }
-  }
-
-  // 2. Dynamic Unpriced Promotion Detection
-  const isUnpricedPromo =
-    (deal as any).isUnpricedPromo ||
-    !unitPrice ||
-    unitPrice === 0 ||
-    /bogo|buy\s+\d+\s+get|free|\d+%\s+off/i.test(searchString);
-
   const handleAction = () => {
     if (onAddToList) {
       onAddToList(deal);
@@ -59,10 +29,14 @@ export default function DealCard({
     }
   };
 
+  const displayPriceText =
+    deal.displayPrice || (deal.salePrice > 0 ? `$${deal.salePrice.toFixed(2)}` : null);
+
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition flex flex-col justify-between p-4 overflow-hidden relative">
+    <div className="flex flex-col bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs hover:shadow-md transition relative justify-between">
+      {/* Lowest Price Banner */}
       {isLowestInGroup && competingCount && competingCount > 1 && (
-        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-3 py-1 text-white text-[11px] font-bold tracking-wide flex items-center justify-between -mx-4 -mt-4 mb-3 rounded-t-xl">
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-3 py-1 text-white text-[11px] font-bold tracking-wide flex items-center justify-between">
           <span>LOWEST LOCAL PRICE</span>
           <span className="text-[10px] font-medium text-emerald-100">
             vs {competingCount - 1} competitor{competingCount > 2 ? 's' : ''}
@@ -70,26 +44,34 @@ export default function DealCard({
         </div>
       )}
 
-      {/* Header: Store Name & Valid Date */}
-      <div className="flex items-center justify-between mb-2">
-        <span
-          className="text-[10px] font-black uppercase px-2.5 py-1 rounded-md text-white tracking-wider"
-          style={{ backgroundColor: deal.storeLogoBg || '#1E293B' }}
-        >
-          {deal.storeName || 'GROCERY'}
-        </span>
+      {/* Store Header & Expiration */}
+      <div className="flex items-center justify-between px-3 py-2 bg-slate-50 border-b border-slate-100">
+        <div className="flex items-center space-x-2">
+          <span
+            className="text-[10px] font-black tracking-wider px-1.5 py-0.5 rounded text-white uppercase"
+            style={{ backgroundColor: deal.storeLogoBg || '#059669' }}
+          >
+            {deal.storeLogoText || 'DEAL'}
+          </span>
+          <span className="text-xs font-semibold text-slate-700 truncate max-w-[140px]">
+            {deal.storeName}
+          </span>
+        </div>
+
         {deal.validUntil && (
-          <span className="text-[11px] font-medium text-slate-400">Ends {deal.validUntil.slice(5)}</span>
+          <span className="text-[11px] text-slate-400">
+            {deal.validUntil.startsWith('202') ? `Ends ${deal.validUntil.slice(5)}` : deal.validUntil}
+          </span>
         )}
       </div>
 
-      {/* Circular Image Tile */}
-      {(deal as any).imageUrl && (
-        <div className="w-full h-44 rounded-xl overflow-hidden mb-3 bg-slate-50 flex items-center justify-center border border-slate-100 relative">
+      {/* Circular Snippet Image */}
+      {deal.imageUrl && (
+        <div className="relative w-full h-44 bg-slate-50 flex items-center justify-center overflow-hidden border-b border-slate-100">
           <img
-            src={(deal as any).imageUrl}
+            src={deal.imageUrl}
             alt={deal.title}
-            className="w-full h-full object-contain p-2"
+            className="object-contain h-full w-full p-2"
             loading="lazy"
             onError={(e) => {
               const target = e.currentTarget;
@@ -98,72 +80,86 @@ export default function DealCard({
               }
             }}
           />
+          {deal.dealBadge && (
+            <span className="absolute bottom-2 right-2 bg-amber-400 text-slate-900 text-[11px] font-black px-2 py-0.5 rounded shadow-xs uppercase">
+              {deal.dealBadge}
+            </span>
+          )}
         </div>
       )}
 
-      {/* Product Title & Dynamic Promo Badge */}
-      <div className="mb-3">
-        {badgeText && (
-          <span className="inline-block bg-amber-500 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded uppercase tracking-wider mb-1.5 shadow-2xs">
-            {badgeText}
-          </span>
-        )}
-        <h3 className="font-bold text-slate-900 text-sm leading-snug line-clamp-2">
-          {deal.title}
-        </h3>
-        {deal.subtitle && (
-          <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">{deal.subtitle}</p>
-        )}
-      </div>
-
-      {/* Dynamic Price Display */}
-      <div className="mt-auto pt-2 border-t border-slate-100">
-        {isUnpricedPromo && !multiBuySubtitle ? (
-          <div className="my-1">
-            <span className="inline-block bg-amber-100 text-amber-900 font-extrabold text-xs px-2 py-1 rounded-md uppercase tracking-wider border border-amber-200">
-              {badgeText || 'SPECIAL OFFER'}
-            </span>
-            <p className="text-xs font-semibold text-slate-500 mt-1">
-              Base price varies in-store • Discount at register
+      {/* Card Content */}
+      <div className="p-3 flex-1 flex flex-col justify-between">
+        <div>
+          <h3 className="text-sm font-bold text-slate-900 leading-snug line-clamp-2">
+            {deal.title}
+          </h3>
+          {deal.subtitle && (
+            <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">
+              {deal.subtitle}
             </p>
-          </div>
-        ) : (
-          <div>
-            <div className="flex items-baseline space-x-2">
-              <span className="text-2xl font-black text-slate-900 font-mono">
-                ${unitPrice.toFixed(2)}
-              </span>
+          )}
+        </div>
 
-              {deal.discountPercent > 0 && deal.originalPrice > unitPrice && (
-                <>
-                  <span className="text-xs text-slate-400 line-through font-mono">
-                    ${deal.originalPrice.toFixed(2)}
-                  </span>
-                  <span className="text-xs font-bold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded">
-                    -{deal.discountPercent}%
-                  </span>
-                </>
-              )}
+        {/* Pricing Area */}
+        <div className="mt-3 pt-2 border-t border-slate-100">
+          {deal.isUnpricedPromo || !displayPriceText ? (
+            /* Unpriced Promotion Display (e.g. BOGO 50% Off) */
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 bg-amber-100 text-amber-900 text-xs font-black px-2 py-1 rounded">
+                <Tag className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                <span>{deal.dealBadge || deal.promoBadgeText || 'SPECIAL PROMOTION'}</span>
+              </div>
+              <p className="text-xs font-semibold text-slate-700">
+                Price varies in-store
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Discount applied at register
+              </p>
             </div>
+          ) : (
+            /* Standard or Multi-Buy Display (e.g. 2 for $7 -> $3.50 ea) */
+            <div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-black text-slate-900 font-mono">
+                  {displayPriceText}
+                </span>
 
-            {multiBuySubtitle ? (
-              <p className="text-xs font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md inline-block mt-1">
-                {multiBuySubtitle}
-              </p>
-            ) : (
-              <p className="text-xs text-slate-500 mt-0.5">
-                Normalized Unit Cost: <span className="font-semibold text-slate-700">{deal.unitPrice || `$${unitPrice.toFixed(2)} each`}</span>
-              </p>
-            )}
-          </div>
-        )}
+                {deal.discountPercent > 0 && deal.originalPrice > deal.salePrice && (
+                  <>
+                    <span className="text-xs text-slate-400 line-through font-mono">
+                      ${deal.originalPrice.toFixed(2)}
+                    </span>
+                    <span className="text-[11px] font-bold text-rose-600 bg-rose-50 px-1 rounded">
+                      -{deal.discountPercent}%
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {/* Multi-Buy Sub-Banner */}
+              {deal.bundleQuantity && deal.bundleQuantity > 1 && deal.bundleTotalPrice ? (
+                <div className="mt-1 flex items-center space-x-1 text-xs text-emerald-800 font-semibold bg-emerald-50 px-2 py-0.5 rounded w-fit">
+                  <Sparkles className="w-3 h-3 text-emerald-600 shrink-0" />
+                  <span>
+                    Must buy {deal.bundleQuantity} for ${deal.bundleTotalPrice.toFixed(2)}
+                  </span>
+                </div>
+              ) : deal.unitDescription ? (
+                <p className="text-[11px] text-slate-500 mt-1 font-medium">
+                  Normalized: {deal.unitDescription}
+                </p>
+              ) : null}
+            </div>
+          )}
+        </div>
 
         {/* Action Buttons: Compare & Add to List */}
-        <div className="mt-3 pt-2 flex items-center justify-between">
+        <div className="mt-3 pt-2 flex items-center justify-between gap-2">
           {competingCount && competingCount > 1 && onOpenComparison ? (
             <button
               onClick={() => onOpenComparison(deal.genericProductGroup)}
-              className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2 py-1 rounded-lg transition"
+              className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2 py-1.5 rounded-lg transition"
               title="View cross-store unit price comparison"
             >
               Compare ({competingCount})
@@ -172,26 +168,28 @@ export default function DealCard({
             <div />
           )}
 
-          <button
-            onClick={handleAction}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 ${
-              isInList
-                ? 'bg-emerald-600 text-white shadow-2xs'
-                : 'bg-slate-900 hover:bg-slate-800 text-white'
-            }`}
-          >
-            {isInList ? (
-              <>
-                <Check className="w-3.5 h-3.5" />
-                <span>Added</span>
-              </>
-            ) : (
-              <>
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add</span>
-              </>
-            )}
-          </button>
+          {(onAddToList || onToggleList) && (
+            <button
+              onClick={handleAction}
+              className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition flex items-center space-x-1.5 ${
+                isInList
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-slate-900 hover:bg-slate-800 text-white'
+              }`}
+            >
+              {isInList ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Added</span>
+                </>
+              ) : (
+                <>
+                  <ShoppingBag className="w-3.5 h-3.5" />
+                  <span>Add to List</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
     </div>

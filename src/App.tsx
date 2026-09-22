@@ -11,6 +11,7 @@ import {
 import { groupSimilarDeals, findBetterAlternative } from './utils/dealMatcher';
 import { queueCartAction } from './utils/syncQueue';
 import { safeStorage } from './utils/safeStorage';
+import { sanitizeDealList } from './utils/dealPricing';
 import Header from './components/Header';
 import LocationModal from './components/LocationModal';
 import CircularsView from './components/CircularsView';
@@ -35,69 +36,6 @@ const DEFAULT_LOCATION: UserLocation = {
   formattedAddress: 'Mechanicsburg, PA 17050, USA',
   isGps: false,
   radiusMiles: 10,
-};
-
-const sanitizeDealsList = (rawDeals: any[]): DealItem[] => {
-  return (rawDeals || [])
-    .filter((deal) => {
-      if (!deal || !deal.title) return false;
-      const titleLower = deal.title.toLowerCase();
-      const badgeLower = (deal.promoBadgeText || deal.dealBadge || '').toLowerCase();
-      const subLower = (deal.subtitle || '').toLowerCase();
-      const combined = `${titleLower} ${subLower} ${badgeLower}`;
-      const banned = ['vtech', 'leapfrog', 'lego', 'toy', 'doll', 'doors opening', 'grand opening', 'hiring'];
-      return !banned.some((b) => combined.includes(b));
-    })
-    .map((deal: any) => {
-      const badge = (deal.promoBadgeText || '').toUpperCase();
-      const title = (deal.title || '').toUpperCase();
-      const combined = `${title} ${badge}`.trim();
-
-      // Dynamic Multi-Buy Parser (works for any "X for $Y" or "X/$Y")
-      const multiMatch = combined.match(/(\d+)\s*(?:FOR|\/)\s*\$?(\d+(?:\.\d{2})?)/);
-      if (multiMatch) {
-        const qty = parseInt(multiMatch[1], 10);
-        const total = parseFloat(multiMatch[2]);
-        if (qty > 1 && total > 0) {
-          deal.bundleQuantity = qty;
-          deal.bundleTotalPrice = total;
-          deal.salePrice = Number((total / qty).toFixed(2));
-          deal.unitDescription = `${qty} for $${total.toFixed(2)} ($${deal.salePrice.toFixed(2)} ea)`;
-          deal.dealType = 'multi_buy';
-          deal.normalizedUnitCost = deal.salePrice;
-          deal.unitPrice = `$${deal.salePrice.toFixed(2)} each`;
-        }
-      } else if (deal.bundleQuantity && deal.bundleQuantity > 1 && deal.bundleTotalPrice) {
-        deal.salePrice = Number((deal.bundleTotalPrice / deal.bundleQuantity).toFixed(2));
-        deal.unitDescription = `${deal.bundleQuantity} for $${deal.bundleTotalPrice.toFixed(2)} ($${deal.salePrice.toFixed(2)} ea)`;
-        deal.dealType = 'multi_buy';
-        deal.normalizedUnitCost = deal.salePrice;
-        deal.unitPrice = `$${deal.salePrice.toFixed(2)} each`;
-      }
-
-      // Dynamic Unpriced Promotion Catch
-      const isUnpricedOffer =
-        deal.isUnpricedPromo ||
-        !deal.salePrice ||
-        deal.salePrice === 0 ||
-        /BOGO|BUY\s+\d+\s+GET|FREE|\d+%\s+OFF/.test(combined);
-
-      if (isUnpricedOffer && (!deal.bundleQuantity || deal.bundleQuantity <= 1)) {
-        deal.isUnpricedPromo = true;
-        deal.salePrice = 0;
-        deal.originalPrice = 0;
-        deal.discountPercent = 0;
-        deal.dealType = 'bogo';
-      }
-
-      // Strip non-verified MSRPs
-      if (!deal.hasExplicitOriginalPrice || deal.originalPrice <= deal.salePrice) {
-        deal.originalPrice = deal.salePrice;
-        deal.discountPercent = 0;
-      }
-
-      return deal;
-    });
 };
 
 export default function App() {
@@ -143,7 +81,7 @@ export default function App() {
   const [deals, setDeals] = useState<DealItem[]>(() => {
     try {
       const saved = safeStorage.getItem(STORAGE_KEY_DEALS);
-      return saved ? sanitizeDealsList(JSON.parse(saved)) : [];
+      return saved ? sanitizeDealList(JSON.parse(saved)) : [];
     } catch {
       return [];
     }
@@ -215,7 +153,7 @@ export default function App() {
           safeStorage.setItem(STORAGE_KEY_STORES, JSON.stringify(newStores));
         }
         if (newDeals.length > 0) {
-          const sanitized = sanitizeDealsList(newDeals);
+          const sanitized = sanitizeDealList(newDeals);
           setDeals(sanitized);
           safeStorage.setItem(STORAGE_KEY_DEALS, JSON.stringify(sanitized));
         }
@@ -315,7 +253,7 @@ export default function App() {
   const handleDealsImported = useCallback((importedDeals: DealItem[], storeId: string) => {
     setDeals((prev) => {
       const remaining = prev.filter((d) => d.storeId !== storeId);
-      const sanitized = sanitizeDealsList([...importedDeals, ...remaining]);
+      const sanitized = sanitizeDealList([...importedDeals, ...remaining]);
       safeStorage.setItem(STORAGE_KEY_DEALS, JSON.stringify(sanitized));
       return sanitized;
     });
