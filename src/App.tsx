@@ -37,6 +37,36 @@ const DEFAULT_LOCATION: UserLocation = {
   radiusMiles: 10,
 };
 
+const sanitizeDealsList = (rawDeals: any[]): DealItem[] => {
+  return (rawDeals || [])
+    .filter((deal) => {
+      if (!deal || !deal.title) return false;
+      const titleLower = deal.title.toLowerCase();
+      const banned = ['vtech', 'leapfrog', 'lego', 'toy', 'doll', 'doors opening', 'grand opening', 'hiring'];
+      return !banned.some((b) => titleLower.includes(b));
+    })
+    .map((deal) => {
+      const combined = `${deal.title} ${deal.subtitle || ''}`.toLowerCase();
+
+      const multiMatch = combined.match(/(\d+)\s*(?:for|\/)\s*\$?(\d+(?:\.\d{2})?)/i);
+      if (multiMatch) {
+        const qty = parseInt(multiMatch[1], 10);
+        const total = parseFloat(multiMatch[2]);
+        if (qty > 1 && total > 0) {
+          deal.salePrice = Number((total / qty).toFixed(2));
+          deal.unitDescription = `${qty} for $${total.toFixed(2)} ($${deal.salePrice.toFixed(2)} ea)`;
+          deal.dealType = 'multi_buy';
+        }
+      }
+
+      if ((combined.includes('buy three') || combined.includes('buy 3') || combined.includes('bogo')) && deal.salePrice === 3.99) {
+        deal.dealType = 'bogo';
+      }
+
+      return deal;
+    });
+};
+
 export default function App() {
   const [location, setLocation] = useState<UserLocation>(() => {
     try {
@@ -80,7 +110,7 @@ export default function App() {
   const [deals, setDeals] = useState<DealItem[]>(() => {
     try {
       const saved = safeStorage.getItem(STORAGE_KEY_DEALS);
-      return saved ? JSON.parse(saved) : [];
+      return saved ? sanitizeDealsList(JSON.parse(saved)) : [];
     } catch {
       return [];
     }
@@ -139,8 +169,9 @@ export default function App() {
           safeStorage.setItem(STORAGE_KEY_STORES, JSON.stringify(newStores));
         }
         if (newDeals.length > 0) {
-          setDeals(newDeals);
-          safeStorage.setItem(STORAGE_KEY_DEALS, JSON.stringify(newDeals));
+          const sanitized = sanitizeDealsList(newDeals);
+          setDeals(sanitized);
+          safeStorage.setItem(STORAGE_KEY_DEALS, JSON.stringify(sanitized));
         }
       } catch (err: any) {
         console.error('[App] Error loading circulars:', err);
@@ -238,7 +269,9 @@ export default function App() {
   const handleDealsImported = useCallback((importedDeals: DealItem[], storeId: string) => {
     setDeals((prev) => {
       const remaining = prev.filter((d) => d.storeId !== storeId);
-      return [...importedDeals, ...remaining];
+      const sanitized = sanitizeDealsList([...importedDeals, ...remaining]);
+      safeStorage.setItem(STORAGE_KEY_DEALS, JSON.stringify(sanitized));
+      return sanitized;
     });
 
     setStores((prev) =>
