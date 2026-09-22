@@ -42,25 +42,56 @@ const sanitizeDealsList = (rawDeals: any[]): DealItem[] => {
     .filter((deal) => {
       if (!deal || !deal.title) return false;
       const titleLower = deal.title.toLowerCase();
+      const badgeLower = (deal.promoBadgeText || deal.dealBadge || '').toLowerCase();
+      const subLower = (deal.subtitle || '').toLowerCase();
+      const combined = `${titleLower} ${subLower} ${badgeLower}`;
       const banned = ['vtech', 'leapfrog', 'lego', 'toy', 'doll', 'doors opening', 'grand opening', 'hiring'];
-      return !banned.some((b) => titleLower.includes(b));
+      return !banned.some((b) => combined.includes(b));
     })
     .map((deal) => {
-      const combined = `${deal.title} ${deal.subtitle || ''}`.toLowerCase();
+      const badge = (deal.promoBadgeText || deal.dealBadge || '').toUpperCase();
+      const title = (deal.title || '').toUpperCase();
+      const combined = `${title} ${badge}`;
 
-      const multiMatch = combined.match(/(\d+)\s*(?:for|\/)\s*\$?(\d+(?:\.\d{2})?)/i);
+      // 1. Detect unpriced BOGO promotions
+      if (
+        deal.hasExplicitDollarPrice === false ||
+        combined.includes('BUY 1 GET 2') ||
+        combined.includes('BUY 1 GET 1') ||
+        combined.includes('BUY ONE, GET ONE') ||
+        combined.includes('BUY THREE, GET ONE') ||
+        combined.includes('BOGO') ||
+        combined.includes('50% OFF')
+      ) {
+        if (deal.salePrice === 3.99 || deal.hasExplicitDollarPrice === false || !deal.salePrice) {
+          deal.isUnpricedPromo = true;
+          deal.salePrice = 0;
+          deal.originalPrice = 0;
+          deal.discountPercent = 0;
+          deal.dealType = 'bogo';
+        }
+      }
+
+      // 2. Multi-Buy division enforcement (e.g. 2 for $7)
+      const multiMatch = combined.match(/(\d+)\s*(?:FOR|\/)\s*\$?(\d+(?:\.\d{2})?)/);
       if (multiMatch) {
         const qty = parseInt(multiMatch[1], 10);
         const total = parseFloat(multiMatch[2]);
         if (qty > 1 && total > 0) {
+          deal.bundleQuantity = qty;
+          deal.bundleTotalPrice = total;
           deal.salePrice = Number((total / qty).toFixed(2));
           deal.unitDescription = `${qty} for $${total.toFixed(2)} ($${deal.salePrice.toFixed(2)} ea)`;
           deal.dealType = 'multi_buy';
+          deal.normalizedUnitCost = deal.salePrice;
+          deal.unitPrice = `$${deal.salePrice.toFixed(2)} each`;
         }
-      }
-
-      if ((combined.includes('buy three') || combined.includes('buy 3') || combined.includes('bogo')) && deal.salePrice === 3.99) {
-        deal.dealType = 'bogo';
+      } else if (deal.bundleQuantity && deal.bundleQuantity > 1 && deal.bundleTotalPrice) {
+        deal.salePrice = Number((deal.bundleTotalPrice / deal.bundleQuantity).toFixed(2));
+        deal.unitDescription = `${deal.bundleQuantity} for $${deal.bundleTotalPrice.toFixed(2)} ($${deal.salePrice.toFixed(2)} ea)`;
+        deal.dealType = 'multi_buy';
+        deal.normalizedUnitCost = deal.salePrice;
+        deal.unitPrice = `$${deal.salePrice.toFixed(2)} each`;
       }
 
       return deal;

@@ -83,6 +83,8 @@ export interface DealItem {
   bundleTotalPrice?: number | null;
   isUnpricedPromo?: boolean;
   hasExplicitOriginalPrice?: boolean;
+  promoBadgeText?: string;
+  hasExplicitDollarPrice?: boolean;
 }
 
 export interface UserLocation {

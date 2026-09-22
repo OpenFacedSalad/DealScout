@@ -82,13 +82,21 @@ export const dealsResponseSchema: Schema = {
         type: Type.STRING,
         enum: ['budget', 'standard', 'premium', 'organic'],
       },
+      promoBadgeText: {
+        type: Type.STRING,
+        description: "EXACT text from graphic badges, e.g. '2 FOR $7', 'BUY 1 GET 2 FREE', 'BUY 1 GET 1 50% OFF', 'SUPER 6'",
+      },
+      hasExplicitDollarPrice: {
+        type: Type.BOOLEAN,
+        description: "FALSE if ad only states BOGO, buy 1 get 2 free, or % off without a base dollar price",
+      },
       bundleQuantity: {
         type: Type.INTEGER,
-        description: 'Number of units required for bundle price, default 1',
+        description: "Total items in bundle (e.g. 2 for '2 for $7', 3 for 'buy 1 get 2 free')",
       },
       bundleTotalPrice: {
         type: Type.NUMBER,
-        description: 'Total bundle package price if multi-buy (e.g. 7.00 for 2 for $7), or null',
+        description: "Total price for the bundle if printed, e.g. 7.00",
       },
       isUnpricedPromo: {
         type: Type.BOOLEAN,
@@ -197,7 +205,8 @@ export function sanitizeAndValidateDeals(rawDeals: DealItem[]): DealItem[] {
 
       const titleLower = deal.title.toLowerCase();
       const subLower = (deal.subtitle || '').toLowerCase();
-      const combinedText = `${titleLower} ${subLower}`;
+      const badgeLower = (deal.promoBadgeText || deal.dealBadge || '').toLowerCase();
+      const combinedText = `${titleLower} ${subLower} ${badgeLower}`;
 
       // 1. Drop non-grocery merchandise
       if (
@@ -219,12 +228,7 @@ export function sanitizeAndValidateDeals(rawDeals: DealItem[]): DealItem[] {
         }
       }
 
-      // 3. Drop unpriced promotions or zero-price entries
-      if (!deal.salePrice || deal.salePrice <= 0 || deal.isUnpricedPromo) {
-        return false;
-      }
-
-      // 4. Drop produce/grocery extreme price anomalies
+      // 3. Drop produce/grocery extreme price anomalies
       if (deal.category === 'produce' && deal.salePrice > 20.0) {
         return false;
       }
@@ -232,35 +236,60 @@ export function sanitizeAndValidateDeals(rawDeals: DealItem[]): DealItem[] {
       return true;
     })
     .map((deal: any) => {
-      // Enforce multi-buy division (e.g. 2 for $7 -> $3.50 ea)
-      if (deal.bundleQuantity && deal.bundleQuantity > 1 && deal.bundleTotalPrice) {
-        deal.salePrice = Number((deal.bundleTotalPrice / deal.bundleQuantity).toFixed(2));
-        deal.unitDescription = `${deal.bundleQuantity} for $${deal.bundleTotalPrice.toFixed(2)}`;
-        deal.dealType = 'multi_buy';
+      const badge = (deal.promoBadgeText || deal.dealBadge || '').toUpperCase();
+      const title = (deal.title || '').toUpperCase();
+      const combined = `${title} ${badge}`;
+
+      // 1. Detect unpriced BOGO promotions
+      if (
+        deal.hasExplicitDollarPrice === false ||
+        combined.includes('BUY 1 GET 2') ||
+        combined.includes('BUY 1 GET 1') ||
+        combined.includes('BUY ONE, GET ONE') ||
+        combined.includes('BUY THREE, GET ONE') ||
+        combined.includes('BOGO') ||
+        combined.includes('50% OFF')
+      ) {
+        if (deal.salePrice === 3.99 || deal.hasExplicitDollarPrice === false || !deal.salePrice) {
+          deal.isUnpricedPromo = true;
+          deal.salePrice = 0;
+          deal.originalPrice = 0;
+          deal.discountPercent = 0;
+          deal.dealType = 'bogo';
+        }
       }
 
-      const multiBuyMatch = deal.title.match(/(\d+)\s*(?:for|\/)\s*\$?(\d+(?:\.\d{2})?)/i);
-      if (multiBuyMatch && (!deal.bundleQuantity || deal.bundleQuantity === 1)) {
-        const qty = parseInt(multiBuyMatch[1], 10);
-        const total = parseFloat(multiBuyMatch[2]);
+      // 2. Multi-Buy division enforcement (e.g. 2 for $7)
+      const multiMatch = combined.match(/(\d+)\s*(?:FOR|\/)\s*\$?(\d+(?:\.\d{2})?)/);
+      if (multiMatch) {
+        const qty = parseInt(multiMatch[1], 10);
+        const total = parseFloat(multiMatch[2]);
         if (qty > 1 && total > 0) {
           deal.bundleQuantity = qty;
           deal.bundleTotalPrice = total;
           deal.salePrice = Number((total / qty).toFixed(2));
-          deal.unitDescription = `${qty} for $${total.toFixed(2)}`;
+          deal.unitDescription = `${qty} for $${total.toFixed(2)} ($${deal.salePrice.toFixed(2)} ea)`;
           deal.dealType = 'multi_buy';
+          deal.normalizedUnitCost = deal.salePrice;
+          deal.unitPrice = `$${deal.salePrice.toFixed(2)} each`;
         }
+      } else if (deal.bundleQuantity && deal.bundleQuantity > 1 && deal.bundleTotalPrice) {
+        deal.salePrice = Number((deal.bundleTotalPrice / deal.bundleQuantity).toFixed(2));
+        deal.unitDescription = `${deal.bundleQuantity} for $${deal.bundleTotalPrice.toFixed(2)} ($${deal.salePrice.toFixed(2)} ea)`;
+        deal.dealType = 'multi_buy';
+        deal.normalizedUnitCost = deal.salePrice;
+        deal.unitPrice = `$${deal.salePrice.toFixed(2)} each`;
       }
 
-      // Recalculate normalized unit cost if single unit
-      if (!deal.normalizedUnitCost || isNaN(deal.normalizedUnitCost) || deal.normalizedUnitCost === 0) {
+      // Recalculate normalized unit cost if single unit and not unpriced promo
+      if (!deal.isUnpricedPromo && (!deal.normalizedUnitCost || isNaN(deal.normalizedUnitCost) || deal.normalizedUnitCost === 0)) {
         deal.normalizedUnitCost = deal.salePrice;
         deal.normalizedUnitType = deal.normalizedUnitType || 'unit';
         deal.unitPrice = `$${deal.salePrice.toFixed(2)} / ${deal.normalizedUnitType}`;
       }
 
       // Strip fabricated discounts
-      if (!deal.hasExplicitOriginalPrice || deal.originalPrice <= deal.salePrice) {
+      if (!deal.hasExplicitOriginalPrice || deal.originalPrice <= deal.salePrice || deal.discountPercent === 22 || deal.discountPercent === 20) {
         deal.originalPrice = deal.salePrice;
         deal.discountPercent = 0;
       }
@@ -526,6 +555,26 @@ export async function parseFlyerWithAI(
 Analyze this physical weekly circular flyer or promotional PDF for "${store.name}".
 Extract EVERY advertised grocery product special, butcher meat cut, produce price, and BOGO deal shown.
 
+CRITICAL IMAGE READING & OCR RULES:
+1. TRANSCRIBE PROMO BADGES:
+   You MUST read and transcribe every colored promotional badge, splash star, or banner in the image into 'promoBadgeText'.
+   Examples: 'BUY 1 GET 2 FREE', '2 FOR $7', 'BUY ONE, GET ONE 50% OFF', '3 FOR $5'.
+2. UNPRICED BOGOS & PERCENTAGE DEALS (PORK CHOPS, CHIPS, AVOCADOS):
+   If an ad tile displays 'BUY 1 GET 2 FREE', 'BUY 1 GET 1 FREE', or '50% OFF' but prints NO base dollar price:
+   - Set hasExplicitDollarPrice = false
+   - Set salePrice = 0.00
+   - Set originalPrice = 0.00
+   - Set discountPercent = 0
+   - DO NOT INVENT A $3.99 PRICE!
+3. MULTI-BUY DIVISION (MAGIC MIND, SODAS, SNACKS):
+   If an ad tile displays '2 FOR $7':
+   - promoBadgeText = '2 FOR $7'
+   - bundleQuantity = 2
+   - bundleTotalPrice = 7.00
+   - salePrice MUST BE 3.50 (7.00 divided by 2). NEVER output 7.00 as the salePrice!
+4. ZERO FABRICATED DISCOUNTS:
+   Never invent regular prices or default discounts (like 22%). If no regular price is printed, set originalPrice = salePrice and discountPercent = 0.
+
 STRICT EXCLUSIONS & FILTERS:
 1. FOOD & GROCERY ONLY:
    Extract ONLY edible food, beverages, and consumable grocery essentials.
@@ -534,30 +583,15 @@ STRICT EXCLUSIONS & FILTERS:
    - NO apparel, shoes, or clothing
    - NO electronics, TVs, video games, or appliances
    - NO patio, furniture, or home decor
-2. MANDATORY DOLLAR PRICE (NO GUESSING):
-   ONLY extract items that display an explicit, printed dollar price (e.g., '$2.99', '$4.49/lb', '2 for $7').
-   IF A BANNER ONLY SAYS 'Up to 30% off', 'Save 20%', 'Special Value', OR 'BOGO' WITHOUT A SPECIFIC BASE DOLLAR PRICE, DO NOT EXTRACT IT. IGNORE IT COMPLETELY.
-   NEVER invent, guess, or default a price to $3.99 or any other number.
-
-Strict Extraction & Pricing Rules:
-3. BAN BANNER HEADERS:
+2. BAN BANNER HEADERS:
    Never parse store announcements, grand openings (e.g. "Doors opening in College Station"), hiring notices, or weekly circular headers as product deals. Every item MUST be an edible food or household consumer product.
-4. ZERO HALLUCINATED DISCOUNTS:
-   If an item does not explicitly show a crossed-out regular price (e.g., "Was $4.99"), set originalPrice equal to salePrice, discountPercent to 0, and hasExplicitOriginalPrice to false. Never invent or reverse-engineer discounts (e.g., 22%).
-5. MULTI-BUY ARITHMETIC:
-   When an ad displays "2 for $7" or "3 for $10":
-   - Set bundleQuantity: 2
-   - Set bundleTotalPrice: 7.00
-   - Compute salePrice: 3.50 (bundleTotalPrice divided by bundleQuantity)
-   - Set unitDescription: "2 for $7 ($3.50 ea)"
-   - Set dealType: 'multi_buy'
-6. STRICT CONSUMER UNIT MATCHING:
+3. STRICT CONSUMER UNIT MATCHING:
    Apples, produce, and meats must be priced per standard consumer units ($/lb, $/oz, or per piece), NEVER whole agricultural crates or bulk cases.
 
 Requirements for each extracted item:
 1. "title": Exact item description from the circular.
 2. "originalPrice": Exact stated pre-sale price if printed; if not printed, set equal to salePrice.
-3. "salePrice": True single-unit promotional package or per-pound sale price (e.g., $3.50 for 2-for-$7 deal).
+3. "salePrice": True single-unit promotional package or per-pound sale price (e.g., $3.50 for 2-for-$7 deal; 0.00 for unpriced BOGOs).
 4. "discountPercent": Percentage discount integer, or 0 if pre-sale price is not explicitly printed.
 5. "unitPrice": Formatted normalized unit price string (e.g., "$3.49 / lb", "$0.20 / egg", "$2.49 / 16 oz").
 6. "normalizedUnitCost": Precise numeric float for mathematical sorting.
@@ -565,19 +599,21 @@ Requirements for each extracted item:
 8. "unitDescription": Brief explanation (e.g. "per pound", "per egg", "2 for $7 ($3.50 ea)").
 9. "dealType": One of ['sale', 'bogo', 'digital_coupon', 'multi_buy'].
 10. "dealBadge": Visual highlight text if present (e.g. "BUTCHER CUT", "BUY 1 GET 1", "CLIP COUPON").
-11. "genericProductGroup": Normalized commodity key for cross-store comparison matching:
+11. "promoBadgeText": Exact text from graphic badges, e.g. '2 FOR $7', 'BUY 1 GET 2 FREE', 'BUY ONE, GET ONE 50% OFF', 'SUPER 6'.
+12. "hasExplicitDollarPrice": Boolean. FALSE if ad only states BOGO, buy 1 get 2 free, or % off without a base dollar price.
+13. "genericProductGroup": Normalized commodity key for cross-store comparison matching:
     (e.g., 'ground_beef_80_20', 'boneless_chicken_breast', 'large_white_eggs', 'whole_milk_gallon',
      'strawberries_1lb', 'honeycrisp_apples', 'bacon_16oz', 'shredded_cheddar_cheese', 'sourdough_bread').
-12. "storeId": Set to "${store.id}".
-13. "storeName": Set to "${store.name}".
-14. "storeLogoBg": Set to "${store.logoBg}".
-15. "storeLogoText": Set to "${store.logoText}".
-16. "validUntil": Extract valid flyer end date, or set to next Tuesday/Wednesday.
-17. "inStock": true.
-18. "bundleQuantity": Integer (default 1, e.g. 2 for "2 for $7").
-19. "bundleTotalPrice": Total price for bundle (e.g. 7.00), or null.
-20. "isUnpricedPromo": Boolean (false for items with valid dollar prices).
-21. "hasExplicitOriginalPrice": Boolean (true ONLY if regular/crossed-out price is printed).
+14. "storeId": Set to "${store.id}".
+15. "storeName": Set to "${store.name}".
+16. "storeLogoBg": Set to "${store.logoBg}".
+17. "storeLogoText": Set to "${store.logoText}".
+18. "validUntil": Extract valid flyer end date, or set to next Tuesday/Wednesday.
+19. "inStock": true.
+20. "bundleQuantity": Integer (default 1, e.g. 2 for "2 for $7").
+21. "bundleTotalPrice": Total price for bundle (e.g. 7.00), or null.
+22. "isUnpricedPromo": Boolean (true for unpriced BOGOs/percent-off without base price).
+23. "hasExplicitOriginalPrice": Boolean (true ONLY if regular/crossed-out price is printed).
 `;
 
   const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
