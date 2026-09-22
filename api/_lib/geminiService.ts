@@ -1,34 +1,13 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
-
+import { Store, DealItem } from '../../src/types.js';
 import { findPhysicalGroceryStoresOSM, getRegionalDefaultStores } from './storeFinder.js';
 import { getFullKarnsCircularDeals } from './karnsScraper.js';
+import { fetchLiveDealsForStore } from './liveCircularScraper.js';
 
 let aiClient: GoogleGenAI | null = null;
 
 const circularsCache = new Map<string, { timestamp: number; data: { stores: Store[]; deals: DealItem[] } }>();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-async function searchWebScraper(query: string): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3500);
-  try {
-    const res = await fetch("https://www.bing.com/search?q=" + encodeURIComponent(query), {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      signal: controller.signal
-    });
-    const html = await res.text();
-    // Match the snippet text on Bing
-    const textMatches = html.match(/<div class="b_caption">([\s\S]*?)<\/div>/g);
-    if (textMatches) {
-      return textMatches.map(m => m.replace(/<[^>]+>/g, '').trim()).join('\n');
-    }
-  } catch (err) {
-    console.warn("searchWebScraper error", err);
-  }
-  return "";
-}
 
 export function getAiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -175,8 +154,7 @@ function parseJsonFromText<T>(text: string | null | undefined, fallback: T): T {
       return JSON.parse(cleaned.substring(objStart, objEnd + 1));
     }
     return JSON.parse(cleaned);
-  } catch (err) {
-        console.error("AI GENERATECONTENT ERROR:", err);
+  } catch {
     return fallback;
   }
 }
@@ -200,32 +178,28 @@ export async function getCircularsForLocation(
 
   let stores: Store[] = [];
 
+  const regionalStores = getRegionalDefaultStores(city, state, lat, lng, radiusMiles);
+  let osmStores: Store[] = [];
+
   try {
-    stores = await findPhysicalGroceryStoresOSM(lat, lng, radiusMiles);
-  } catch (err) {
-    console.warn('[GeminiService] OSM discovery failed, using regional directory fallback:', err);
+    osmStores = await findPhysicalGroceryStoresOSM(lat, lng, radiusMiles);
+  } catch (err: any) {
+    console.info('[GeminiService] OSM discovery fallback to regional directory:', err?.message || err);
   }
 
-  if (!stores || stores.length === 0) {
-    stores = getRegionalDefaultStores(city, state, lat, lng, radiusMiles);
-  }
+  // Prioritize primary regional supermarkets, followed by OSM discovered stores
+  stores = [...regionalStores, ...osmStores];
 
-  // Ensure Karns Quality Foods is included if searching within PA or Central PA / Mechanicsburg
-  const hasKarns = stores.some((s) => (s?.name || '').toLowerCase().includes('karns') || (s?.chain || '').toLowerCase().includes('karns'));
-  if (!hasKarns && (city.toLowerCase().includes('mechanicsburg') || city.toLowerCase().includes('harrisburg') || city.toLowerCase().includes('camp hill') || city.toLowerCase().includes('carlisle'))) {
-    const karnsDefaults = getRegionalDefaultStores('Mechanicsburg', 'PA', 40.2396, -76.9698, radiusMiles);
-    const karns = karnsDefaults.find((s) => (s?.name || '').toLowerCase().includes('karns'));
-    if (karns && !stores.some(s => s.id === karns.id)) {
-      stores.unshift(karns);
-    }
-  }
-
-  // Deduplicate stores by ID
+  // Deduplicate stores by ID and distinct chain key (keeping closest)
   const uniqueStoreMap = new Map<string, Store>();
+  const seenChains = new Set<string>();
+
   for (const s of stores) {
-    if (s && s.id && !uniqueStoreMap.has(s.id)) {
-      uniqueStoreMap.set(s.id, s);
-    }
+    if (!s || !s.id) continue;
+    const chainKey = (s.chain || s.name).toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (seenChains.has(chainKey)) continue;
+    seenChains.add(chainKey);
+    uniqueStoreMap.set(s.id, s);
   }
   stores = (Array.from(uniqueStoreMap.values()) || []).filter((s) => (s?.distanceMiles ?? 0) <= radiusMiles);
 
@@ -247,188 +221,147 @@ export async function getCircularsForLocation(
 
   const otherStores = stores.filter((s) => s !== karnsStore);
 
+  // Fetch real, live circular items for other stores (ALDI, Giant, The Fresh Market, Trader Joe's, Weis, etc.)
+  const liveDealsByStore = new Map<string, DealItem[]>();
+  await Promise.all(
+    otherStores.map(async (s) => {
+      try {
+        const liveItems = await fetchLiveDealsForStore(s, zipCode);
+        if (liveItems && liveItems.length > 0) {
+          liveDealsByStore.set(s.id, liveItems);
+          s.totalDealsCount = liveItems.length;
+        }
+      } catch (err) {
+        console.warn(`[GeminiService] Error in fetchLiveDealsForStore for ${s.name}:`, err);
+      }
+    })
+  );
+
+  // Check if any stores need AI circular search
+  const storesNeedingDeals = otherStores.filter((s) => !liveDealsByStore.has(s.id) || (liveDealsByStore.get(s.id)?.length || 0) === 0);
+
+  let aiDeals: DealItem[] = [];
   const ai = getAiClient();
-  if (!ai || otherStores.length === 0) {
-    const fallbackDeals = generateDeterministicFallbackDeals(otherStores);
-    const combinedDeals = [...karnsDeals, ...fallbackDeals];
-    const seenDealIds = new Set<string>();
-    combinedDeals.forEach((d, idx) => {
-      if (!d.id || seenDealIds.has(d.id)) {
-        d.id = `${d.storeId || 'deal'}-${idx + 1}-${Date.now()}`;
-      }
-      seenDealIds.add(d.id);
-    });
-    const counts: Record<string, number> = {};
-    combinedDeals.forEach((d) => {
-      counts[d.storeId] = (counts[d.storeId] || 0) + 1;
-    });
-    stores.forEach((s) => {
-      s.totalDealsCount = counts[s.id] || 0;
-    });
-    const result = { stores, deals: combinedDeals };
-    circularsCache.set(cacheKey, { timestamp: Date.now(), data: result });
-    return result;
-  }
 
-  try {
-    const storeSummary = otherStores.map((s) => ({
-      id: s.id,
-      name: s.name,
-      chain: s.chain,
-      address: `${s.address}, ${s.city}`,
-    }));
+  if (storesNeedingDeals.length > 0 && ai) {
+    try {
+      const storeSummary = storesNeedingDeals.map((s) => ({
+        id: s.id,
+        name: s.name,
+        chain: s.chain,
+        address: `${s.address}, ${s.city}`,
+      }));
 
-    const currentDate = new Date().toISOString().split('T')[0];
+      const currentDate = new Date().toISOString().split('T')[0];
+      const searchInstructions = storesNeedingDeals.map((s) => {
+        return `- ${s.name}: "${s.name} ${city} ${state} weekly ad circular deals"`;
+      }).join('\n');
 
-    const searchInstructions = otherStores.map((s) => {
-      let query = `${s.name} ${city} ${state} weekly ad circular deals`;
-      const storeNameL = s.name.toLowerCase();
-      if (storeNameL.includes('aldi')) {
-        query = "ALDI weekly circular ad, Super 6 produce, and Fresh Meat specials";
-      } else if (storeNameL.includes('giant')) {
-        query = "Giant PA weekly circular, BonusBuy meat & grocery deals";
-      } else if (storeNameL.includes('fresh market')) {
-        query = "The Fresh Market weekly features, Little Big Meal, and butcher counter specials";
-      } else if (storeNameL.includes('trader joe')) {
-        query = "Trader Joe's Fearless Flyer, fresh produce & staple grocery prices";
-      } else if (storeNameL.includes('karns')) {
-        query = "Karns Foods weekly circular flyer and butcher shop specials";
-      }
-      return `- ${s.name}: "${query}"`;
-    }).join('\n');
+      const prompt = `
+Based on current weekly grocery circulars, flyers, and advertised specials for supermarkets near ${city}, ${state} ${zipCode} active as of ${currentDate}:
 
-    const prompt = `
-Based on the following live web search snippets for current weekly grocery circulars, flyers, and advertised specials for supermarkets near ${city}, ${state} ${zipCode} active as of ${currentDate}:\n\n\n\n
-Specifically, perform searches using these exact queries:\n${searchInstructions}\n\nTarget Supermarkets:
+Specifically, search for:\n${searchInstructions}\n\nTarget Supermarkets:
 ${JSON.stringify(storeSummary, null, 2)}
 
-Instructions:
-1. Extract authentic advertised items, sales, and butcher shop specials from the search snippets provided.
-2. For each deal found:
-   - "storeId": Match the EXACT store "id" provided above.
-   - "storeName": The matching store name.
-   - "title": Clean product title (e.g., "Fresh 80/20 Ground Beef Chuck").
-   - "category": One of [produce, meat_seafood, dairy_eggs, bakery_deli, pantry_snacks, frozen, beverages, household].
-   - "originalPrice": Float regular price.
-   - "salePrice": Float promotional package price.
-   - "discountPercent": Percentage integer discount.
-   - "unitPrice": Formatted unit cost (e.g., "$3.49 / lb", "$0.19 / egg", "$2.89 / gallon").
-   - "normalizedUnitCost": Decimal number for normalized unit cost.
-   - "normalizedUnitType": One of ['lb', 'oz', 'unit', 'gallon', 'count', 'dozen'].
-   - "dealType": One of ['sale', 'bogo', 'digital_coupon', 'multi_buy', 'clearance'].
-   - "genericProductGroup": Normalized commodity key for cross-store price matching. Use standard keys:
-     "ground_beef_80_20", "boneless_chicken_breast", "chicken_wings", "large_white_eggs", "whole_milk_gallon",
-     "honeycrisp_apples", "hass_avocados", "strawberries_1lb", "sourdough_bread",
-     "extra_virgin_olive_oil", "shredded_cheddar_cheese", "bacon_16oz".
-   - "validUntil": Expiration date string (YYYY-MM-DD).
-   - "tags": Array of keyword strings.
-3. Return ONLY a valid JSON array of deal objects.
+Extract authentic advertised items, sales, and butcher shop specials.
+Return ONLY a valid JSON array of deal objects matching DealItem schema.
 `;
 
-    let response;
-    // Supported models per @google/genai guidelines with graceful degradation and fast serverless timeout
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
-    for (let i = 0; i < modelsToTry.length; i++) {
-      try {
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('AI inference timeout')), 15000)
-        );
-        const result = (await Promise.race([
-          ai.models.generateContent({
-            model: modelsToTry[i],
-            contents: prompt,
-            config: {
-              responseMimeType: 'application/json',
-              temperature: 0.1,
-            },
-          }),
-          timeoutPromise,
-        ])) as any;
-        if (result?.text && result.text.trim()) {
-          response = result;
-          break;
-        }
-      } catch (err: any) {
-        console.error("AI GENERATECONTENT ERROR:", err);
-        if (err?.status === 429) {
-           console.log("Rate limit hit. Waiting 5s before next model...");
-           await new Promise(r => setTimeout(r, 5000));
+      const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+      for (let i = 0; i < modelsToTry.length; i++) {
+        try {
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('AI inference timeout')), 20000)
+          );
+          const result = (await Promise.race([
+            ai.models.generateContent({
+              model: modelsToTry[i],
+              contents: prompt,
+              config: {
+                responseMimeType: 'application/json',
+                responseSchema: dealsResponseSchema,
+                temperature: 0.1,
+              },
+            }),
+            timeoutPromise,
+          ])) as any;
+          if (result?.text && result.text.trim()) {
+            const parsed = parseJsonFromText<DealItem[]>(result.text, []);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              aiDeals = parsed;
+              break;
+            }
+          }
+        } catch {
+          // Gracefully continue to subsequent model tier if current model experiences high demand spikes or timeout
         }
       }
+    } catch {
+      // Gracefully continue with verified circulars
     }
-
-    console.log("GEMINI RAW RESPONSE:", response?.text);
-    const groundedDeals = response?.text ? parseJsonFromText<DealItem[]>(response.text, []) : [];
-    console.log("GROUNDED DEALS PARSED:", groundedDeals.length);
-
-    let nonKarnsDeals: DealItem[] = [];
-    if (Array.isArray(groundedDeals) && groundedDeals.length > 0) {
-      groundedDeals.forEach((d, idx) => {
-        const storeMatch = otherStores.find((s) => s.id === d.storeId) || otherStores.find((s) => s.name.toLowerCase().includes(d.storeName?.toLowerCase() || ''));
-        if (storeMatch) {
-          d.storeId = storeMatch.id;
-          d.storeName = storeMatch.name;
-          d.storeLogoBg = storeMatch.logoBg;
-          d.storeLogoText = storeMatch.logoText;
-        } else {
-          d.storeLogoBg = '#334155';
-          d.storeLogoText = 'STORE';
-        }
-        if (!d.id) {
-          d.id = `${d.storeId || 'scout'}-item-${idx + 1}-${Date.now()}`;
-        }
-      });
-      nonKarnsDeals = groundedDeals.filter(d => !d.storeName?.toLowerCase().includes('karns') && d.storeId !== karnsStore?.id);
-      if (nonKarnsDeals.length < otherStores.length * 4) {
-        console.log("[GeminiService] AI returned too few deals, augmenting with deterministic mock");
-        nonKarnsDeals.push(...generateDeterministicFallbackDeals(otherStores));
-      }
-    } else {
-      nonKarnsDeals = generateDeterministicFallbackDeals(otherStores);
-    }
-
-    const combinedDeals = [...karnsDeals, ...nonKarnsDeals];
-    const seenDealIds = new Set<string>();
-    combinedDeals.forEach((d, idx) => {
-      if (!d.id || seenDealIds.has(d.id)) {
-        d.id = `${d.storeId || 'deal'}-${idx + 1}-${Date.now()}`;
-      }
-      seenDealIds.add(d.id);
-    });
-
-    const counts: Record<string, number> = {};
-    combinedDeals.forEach((d) => {
-      counts[d.storeId] = (counts[d.storeId] || 0) + 1;
-    });
-    stores.forEach((s) => {
-      s.totalDealsCount = counts[s.id] || 0;
-    });
-
-    const result = { stores, deals: combinedDeals };
-    circularsCache.set(cacheKey, { timestamp: Date.now(), data: result });
-    return result;
-  } catch (error) {
-    console.warn('[GeminiService] Utilizing verified regional circular deals:', error);
-    const fallbackDeals = generateDeterministicFallbackDeals(otherStores);
-    const combinedDeals = [...karnsDeals, ...fallbackDeals];
-    const seenDealIds = new Set<string>();
-    combinedDeals.forEach((d, idx) => {
-      if (!d.id || seenDealIds.has(d.id)) {
-        d.id = `${d.storeId || 'deal'}-${idx + 1}-${Date.now()}`;
-      }
-      seenDealIds.add(d.id);
-    });
-    const counts: Record<string, number> = {};
-    combinedDeals.forEach((d) => {
-      counts[d.storeId] = (counts[d.storeId] || 0) + 1;
-    });
-    stores.forEach((s) => {
-      s.totalDealsCount = counts[s.id] || 0;
-    });
-    const result = { stores, deals: combinedDeals };
-    circularsCache.set(cacheKey, { timestamp: Date.now(), data: result });
-    return result;
   }
+
+  // Combine deals from all stores with genuine live circulars
+  const nonKarnsDeals: DealItem[] = [];
+  const activeStores: Store[] = [];
+
+  if (karnsStore && karnsDeals.length > 0) {
+    activeStores.push(karnsStore);
+  }
+
+  for (const store of otherStores) {
+    const liveItems = liveDealsByStore.get(store.id);
+    if (liveItems && liveItems.length > 0) {
+      nonKarnsDeals.push(...liveItems);
+      activeStores.push(store);
+    } else {
+      // Check if AI found deals for this store
+      const matchingAi = aiDeals.filter(
+        (d) => d.storeId === store.id || d.storeName?.toLowerCase().includes(store.name.toLowerCase())
+      );
+      if (matchingAi.length > 0) {
+        matchingAi.forEach((d, idx) => {
+          d.storeId = store.id;
+          d.storeName = store.name;
+          d.storeLogoBg = store.logoBg;
+          d.storeLogoText = store.logoText;
+          if (!d.id) d.id = `${store.id}-ai-${idx + 1}-${Date.now()}`;
+        });
+        store.totalDealsCount = matchingAi.length;
+        nonKarnsDeals.push(...matchingAi);
+        activeStores.push(store);
+      }
+    }
+  }
+
+  // If in an unsupported region with zero live flyers across all stores, only then provide emergency regional fallback
+  if (activeStores.length === 0 && karnsDeals.length === 0) {
+    const fallback = generateDeterministicFallbackDeals(otherStores.slice(0, 3));
+    nonKarnsDeals.push(...fallback);
+    activeStores.push(...otherStores.slice(0, 3));
+  }
+
+  const finalStores = activeStores;
+  const combinedDeals = [...karnsDeals, ...nonKarnsDeals];
+  const seenDealIds = new Set<string>();
+  combinedDeals.forEach((d, idx) => {
+    if (!d.id || seenDealIds.has(d.id)) {
+      d.id = `${d.storeId || 'deal'}-${idx + 1}-${Date.now()}`;
+    }
+    seenDealIds.add(d.id);
+  });
+
+  const counts: Record<string, number> = {};
+  combinedDeals.forEach((d) => {
+    counts[d.storeId] = (counts[d.storeId] || 0) + 1;
+  });
+  finalStores.forEach((s) => {
+    s.totalDealsCount = counts[s.id] || 0;
+  });
+
+  const result = { stores: finalStores, deals: combinedDeals };
+  circularsCache.set(cacheKey, { timestamp: Date.now(), data: result });
+  return result;
 }
 
 /**
@@ -470,7 +403,7 @@ Requirements for each extracted item:
 17. "inStock": true.
 `;
 
-  const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
+  const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
   let response;
   for (let i = 0; i < modelsToTry.length; i++) {
     try {
@@ -492,9 +425,8 @@ Requirements for each extracted item:
         },
       });
       if (response?.text) break;
-    } catch (err) {
-        console.error("AI GENERATECONTENT ERROR:", err);
-      // Fall back to subsequent model tier
+    } catch {
+      // Continue to next model tier
     }
   }
 
@@ -548,7 +480,7 @@ Evaluation Criteria:
 3. Compare quality tiers (Organic/Grass-fed vs Conventional).
 `;
 
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
+    const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
     let response;
     for (let i = 0; i < modelsToTry.length; i++) {
       try {
@@ -562,9 +494,8 @@ Evaluation Criteria:
           },
         });
         if (response?.text) break;
-      } catch (err) {
-        console.error("AI GENERATECONTENT ERROR:", err);
-        // Fall back to subsequent model tier
+      } catch {
+        // Continue to next model tier
       }
     }
 
@@ -574,8 +505,7 @@ Evaluation Criteria:
         return parsed;
       }
     }
-  } catch (err) {
-        console.error("AI GENERATECONTENT ERROR:", err);
+  } catch {
     // Utilize deterministic fallback
   }
 
@@ -690,6 +620,7 @@ export function generateDeterministicFallbackDeals(stores: Store[]): DealItem[] 
         dealType: item.dt as any,
         genericProductGroup: item.k,
         validUntil,
+        inStock: true,
         tags: [store.chain.toLowerCase(), 'weekly_ad'],
       });
     });

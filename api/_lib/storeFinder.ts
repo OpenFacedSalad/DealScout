@@ -2,7 +2,13 @@ import { Store } from '../../src/types.js';
 
 const NOMINATIM_USER_AGENT = 'DealScout-Grocery-App/2.0 (contact: support@dealscout.local)';
 const NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org';
-const OVERPASS_BASE_URL = 'https://overpass-api.de/api/interpreter';
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
+
+const osmStoreCache = new Map<string, { timestamp: number; stores: Store[] }>();
+const OSM_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 const geocodeCache = new Map<string, { lat: number; lng: number; city: string; state: string; zipCode: string; formattedAddress: string }>();
 
@@ -226,32 +232,58 @@ export async function findPhysicalGroceryStoresOSM(
   lng: number,
   radiusMiles: number = 10
 ): Promise<Store[]> {
-  const radiusMeters = Math.round(radiusMiles * 1609.34);
+  const cacheKey = `${lat.toFixed(2)}_${lng.toFixed(2)}_${radiusMiles}`;
+  const cached = osmStoreCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < OSM_CACHE_TTL_MS) {
+    return cached.stores;
+  }
+
+  const radiusMeters = Math.min(Math.round(radiusMiles * 1609.34), 25000);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
+  const timeout = setTimeout(() => controller.abort(), 5000);
 
   const query = `
-    [out:json][timeout:3];
+    [out:json][timeout:5];
     (
       node["shop"~"supermarket|grocery"](around:${radiusMeters},${lat},${lng});
-      way["shop"~"supermarket|grocery"](around:${radiusMeters},${lat},${lng});
     );
-    out center tags 30;
+    out center tags 35;
   `;
 
   try {
-    const response = await fetch(OVERPASS_BASE_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': NOMINATIM_USER_AGENT,
-      },
-      body: `data=${encodeURIComponent(query)}`,
-      signal: controller.signal,
-    });
+    let response: Response | null = null;
+    let fetchError: any = null;
 
-    if (!response.ok) {
-      throw new Error(`Overpass API responded with HTTP ${response.status}`);
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': NOMINATIM_USER_AGENT,
+          },
+          body: `data=${encodeURIComponent(query)}`,
+          signal: controller.signal,
+        });
+        if (res.ok) {
+          response = res;
+          break;
+        }
+      } catch (err: any) {
+        fetchError = err;
+        if (err?.name === 'AbortError') {
+          break;
+        }
+      }
+    }
+
+    if (!response) {
+      if (fetchError && fetchError.name !== 'AbortError') {
+        console.info('[storeFinder] OSM lookup unavailable; using regional directory.');
+      } else {
+        console.info('[storeFinder] OSM lookup timed out; using regional directory.');
+      }
+      return [];
     }
 
     const data = await response.json();
@@ -309,9 +341,15 @@ export async function findPhysicalGroceryStoresOSM(
       });
     }
 
-    return stores.sort((a, b) => a.distanceMiles - b.distanceMiles);
-  } catch (error) {
-    console.warn('[storeFinder] Overpass query failed or timed out:', error);
+    const sortedStores = stores.sort((a, b) => a.distanceMiles - b.distanceMiles);
+    osmStoreCache.set(cacheKey, { timestamp: Date.now(), stores: sortedStores });
+    return sortedStores;
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      console.info('[storeFinder] OSM lookup timed out; using regional directory.');
+    } else {
+      console.info('[storeFinder] OSM lookup fallback to regional directory.');
+    }
     return [];
   } finally {
     clearTimeout(timeout);
