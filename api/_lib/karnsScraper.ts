@@ -30,14 +30,15 @@ const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 function parseKarnsPrice(dealStr: string, subtitle: string) {
   const cleanDeal = dealStr.trim();
-  let salePrice = 3.99;
-  let originalPrice = 4.99;
+  let salePrice = 0;
+  let originalPrice = 0;
   let unitPrice = cleanDeal;
-  let normalizedUnitCost = 3.99;
+  let normalizedUnitCost = 0;
   let normalizedUnitType: NormalizedUnitType = 'unit';
   let unitDescription = 'per unit';
   let dealType: DealType = 'sale';
   let dealBadge: string | undefined = undefined;
+  let isUnpricedPromo = false;
 
   let savingsAmount = 0;
   const saveMatch = subtitle.match(/Save\s+\$?([\d\.]+)/i);
@@ -49,23 +50,29 @@ function parseKarnsPrice(dealStr: string, subtitle: string) {
   if (/bogo|buy\s+one\s+get\s+one/i.test(cleanDeal)) {
     dealType = 'bogo';
     dealBadge = 'BOGO FREE';
-    salePrice = savingsAmount > 0 ? savingsAmount : 3.99;
-    originalPrice = salePrice * 2;
-    normalizedUnitCost = Number((salePrice / 2).toFixed(2));
-    unitPrice = `$${normalizedUnitCost.toFixed(2)} ea (BOGO Free)`;
-    unitDescription = 'effective per item';
+    if (savingsAmount > 0) {
+      salePrice = savingsAmount;
+      originalPrice = salePrice * 2;
+      normalizedUnitCost = Number((salePrice / 2).toFixed(2));
+      unitPrice = `$${normalizedUnitCost.toFixed(2)} ea (BOGO Free)`;
+      unitDescription = 'effective per item';
+    } else {
+      isUnpricedPromo = true;
+      salePrice = 0;
+      originalPrice = 0;
+      normalizedUnitCost = 0;
+      unitPrice = 'Varies in-store';
+      unitDescription = 'Discount at register';
+    }
   } else if (/buy\s+(\d+)\s+get\s+(\d+)\s+free/i.test(cleanDeal)) {
-    const m = cleanDeal.match(/buy\s+(\d+)\s+get\s+(\d+)\s+free/i);
-    dealType = 'multi_buy';
+    dealType = 'bogo';
     dealBadge = cleanDeal.toUpperCase();
-    const buyCount = parseInt(m![1], 10);
-    const freeCount = parseInt(m![2], 10);
-    const totalCount = buyCount + freeCount;
-    originalPrice = 5.99;
-    salePrice = Number(((buyCount * originalPrice) / totalCount).toFixed(2));
-    normalizedUnitCost = salePrice;
-    unitPrice = `$${salePrice.toFixed(2)} ea (${cleanDeal})`;
-    unitDescription = 'effective per item';
+    isUnpricedPromo = true;
+    salePrice = 0;
+    originalPrice = 0;
+    normalizedUnitCost = 0;
+    unitPrice = 'Varies in-store';
+    unitDescription = 'Discount at register';
   }
   // 2. Multi-buy e.g. 2/$4
   else if (/^(\d+)\s*\/\s*\$?([\d\.]+)$/.test(cleanDeal)) {
@@ -75,7 +82,7 @@ function parseKarnsPrice(dealStr: string, subtitle: string) {
     dealType = 'multi_buy';
     dealBadge = `${qty} FOR $${total}`;
     salePrice = Number((total / qty).toFixed(2));
-    originalPrice = savingsAmount > 0 ? salePrice + (savingsAmount / qty) : salePrice * 1.25;
+    originalPrice = savingsAmount > 0 ? salePrice + (savingsAmount / qty) : salePrice;
     normalizedUnitCost = salePrice;
     unitPrice = `$${salePrice.toFixed(2)} each (${cleanDeal})`;
     unitDescription = 'per item';
@@ -88,7 +95,7 @@ function parseKarnsPrice(dealStr: string, subtitle: string) {
     normalizedUnitCost = salePrice;
     unitPrice = `$${salePrice.toFixed(2)} / lb`;
     unitDescription = 'per pound';
-    originalPrice = savingsAmount > 0 ? salePrice + savingsAmount : Number((salePrice * 1.3).toFixed(2));
+    originalPrice = savingsAmount > 0 ? salePrice + savingsAmount : salePrice;
     dealType = 'sale';
     if (/must\s+buy\s+\d+\s+lbs/i.test(subtitle)) {
       dealBadge = '5 LB+ VALUE PACK';
@@ -103,16 +110,18 @@ function parseKarnsPrice(dealStr: string, subtitle: string) {
     normalizedUnitCost = salePrice;
     unitPrice = `$${salePrice.toFixed(2)}`;
     unitDescription = 'each';
-    originalPrice = savingsAmount > 0 ? salePrice + savingsAmount : Number((salePrice * 1.25).toFixed(2));
+    originalPrice = savingsAmount > 0 ? salePrice + savingsAmount : salePrice;
     dealType = 'sale';
     if (/each/i.test(cleanDeal)) {
       unitPrice += ' each';
     }
+  } else {
+    isUnpricedPromo = true;
   }
 
-  const discountPercent = originalPrice > salePrice
-    ? Math.min(85, Math.max(5, Math.round(((originalPrice - salePrice) / originalPrice) * 100)))
-    : 15;
+  const discountPercent = originalPrice > salePrice && salePrice > 0
+    ? Math.round(((originalPrice - salePrice) / originalPrice) * 100)
+    : 0;
 
   return {
     salePrice: Number(salePrice.toFixed(2)),
@@ -124,6 +133,8 @@ function parseKarnsPrice(dealStr: string, subtitle: string) {
     unitDescription,
     dealType,
     dealBadge,
+    promoBadgeText: dealBadge,
+    isUnpricedPromo,
   };
 }
 

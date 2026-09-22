@@ -48,31 +48,12 @@ const sanitizeDealsList = (rawDeals: any[]): DealItem[] => {
       const banned = ['vtech', 'leapfrog', 'lego', 'toy', 'doll', 'doors opening', 'grand opening', 'hiring'];
       return !banned.some((b) => combined.includes(b));
     })
-    .map((deal) => {
-      const badge = (deal.promoBadgeText || deal.dealBadge || '').toUpperCase();
+    .map((deal: any) => {
+      const badge = (deal.promoBadgeText || '').toUpperCase();
       const title = (deal.title || '').toUpperCase();
-      const combined = `${title} ${badge}`;
+      const combined = `${title} ${badge}`.trim();
 
-      // 1. Detect unpriced BOGO promotions
-      if (
-        deal.hasExplicitDollarPrice === false ||
-        combined.includes('BUY 1 GET 2') ||
-        combined.includes('BUY 1 GET 1') ||
-        combined.includes('BUY ONE, GET ONE') ||
-        combined.includes('BUY THREE, GET ONE') ||
-        combined.includes('BOGO') ||
-        combined.includes('50% OFF')
-      ) {
-        if (deal.salePrice === 3.99 || deal.hasExplicitDollarPrice === false || !deal.salePrice) {
-          deal.isUnpricedPromo = true;
-          deal.salePrice = 0;
-          deal.originalPrice = 0;
-          deal.discountPercent = 0;
-          deal.dealType = 'bogo';
-        }
-      }
-
-      // 2. Multi-Buy division enforcement (e.g. 2 for $7)
+      // Dynamic Multi-Buy Parser (works for any "X for $Y" or "X/$Y")
       const multiMatch = combined.match(/(\d+)\s*(?:FOR|\/)\s*\$?(\d+(?:\.\d{2})?)/);
       if (multiMatch) {
         const qty = parseInt(multiMatch[1], 10);
@@ -92,6 +73,27 @@ const sanitizeDealsList = (rawDeals: any[]): DealItem[] => {
         deal.dealType = 'multi_buy';
         deal.normalizedUnitCost = deal.salePrice;
         deal.unitPrice = `$${deal.salePrice.toFixed(2)} each`;
+      }
+
+      // Dynamic Unpriced Promotion Catch
+      const isUnpricedOffer =
+        deal.isUnpricedPromo ||
+        !deal.salePrice ||
+        deal.salePrice === 0 ||
+        /BOGO|BUY\s+\d+\s+GET|FREE|\d+%\s+OFF/.test(combined);
+
+      if (isUnpricedOffer && (!deal.bundleQuantity || deal.bundleQuantity <= 1)) {
+        deal.isUnpricedPromo = true;
+        deal.salePrice = 0;
+        deal.originalPrice = 0;
+        deal.discountPercent = 0;
+        deal.dealType = 'bogo';
+      }
+
+      // Strip non-verified MSRPs
+      if (!deal.hasExplicitOriginalPrice || deal.originalPrice <= deal.salePrice) {
+        deal.originalPrice = deal.salePrice;
+        deal.discountPercent = 0;
       }
 
       return deal;
@@ -167,6 +169,19 @@ export default function App() {
   useEffect(() => {
     safeStorage.setItem(STORAGE_KEY_LIST, JSON.stringify(rawShoppingList));
   }, [rawShoppingList]);
+
+  // Purge legacy and stale deals cache on mount to prevent stale JSON from prior sessions
+  useEffect(() => {
+    try {
+      localStorage.removeItem('dealscout_deals');
+      localStorage.removeItem('deals_cache');
+      localStorage.removeItem('dealscout_circulars');
+      localStorage.removeItem('grocery_circulars_deals_cache');
+      localStorage.removeItem('dealscout_cached_deals_v2');
+    } catch {
+      // Safe storage fallback
+    }
+  }, []);
 
   const fetchCirculars = useCallback(
     async (targetLocation: UserLocation, targetRadius: number) => {

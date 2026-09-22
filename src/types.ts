@@ -63,6 +63,7 @@ export interface DealItem {
   title: string;
   subtitle?: string;
   imageUrl?: string;
+  ocrTranscript?: string;
   category: DealCategory;
   originalPrice: number;
   salePrice: number;

@@ -263,6 +263,8 @@ function parsePriceAndUnits(rawName: string, rawPrice?: string): {
   unitDescription: string;
   dealType: DealType;
   dealBadge?: string;
+  promoBadgeText?: string;
+  isUnpricedPromo?: boolean;
 } {
   const nameL = rawName.toLowerCase();
   let price = 0;
@@ -286,14 +288,12 @@ function parsePriceAndUnits(rawName: string, rawPrice?: string): {
     }
   }
 
-  // Default fallback if still 0
-  if (price === 0) {
-    price = 3.99;
-  }
+  // If price is still 0, mark as unpriced promo
+  const isUnpriced = price === 0;
 
   let unitType: NormalizedUnitType = 'unit';
-  let unitPrice = `$${price.toFixed(2)} each`;
-  let unitDesc = 'each';
+  let unitPrice = isUnpriced ? 'Varies in-store' : `$${price.toFixed(2)} each`;
+  let unitDesc = isUnpriced ? 'Discount at register' : 'each';
   let dealType: DealType = 'sale';
   let dealBadge: string | undefined = undefined;
 
@@ -313,27 +313,29 @@ function parsePriceAndUnits(rawName: string, rawPrice?: string): {
     nameL.includes('brisket')
   ) {
     unitType = 'lb';
-    unitPrice = `$${price.toFixed(2)} / lb`;
+    unitPrice = isUnpriced ? 'Varies in-store' : `$${price.toFixed(2)} / lb`;
     unitDesc = 'per lb';
   } else if (nameL.includes('dozen') || nameL.includes('eggs') || nameL.includes('egg')) {
     unitType = 'dozen';
-    unitPrice = `$${price.toFixed(2)} / dozen`;
+    unitPrice = isUnpriced ? 'Varies in-store' : `$${price.toFixed(2)} / dozen`;
     unitDesc = 'per dozen';
   } else if (nameL.includes('gallon') || nameL.includes('milk')) {
     unitType = 'gallon';
-    unitPrice = `$${price.toFixed(2)} / gallon`;
+    unitPrice = isUnpriced ? 'Varies in-store' : `$${price.toFixed(2)} / gallon`;
     unitDesc = 'per gallon';
   } else if (nameL.includes('bogo') || nameL.includes('buy 1 get 1') || nameL.includes('buy one get one')) {
     dealType = 'bogo';
     dealBadge = 'BOGO FREE';
-    unitPrice = `$${(price / 2).toFixed(2)} ea (BOGO Free)`;
-    unitDesc = 'effective per item';
+    unitPrice = isUnpriced ? 'Varies in-store' : `$${(price / 2).toFixed(2)} ea (BOGO Free)`;
+    unitDesc = isUnpriced ? 'Discount at register' : 'effective per item';
   }
 
   // Estimated regular shelf price
   const markup = dealType === 'bogo' ? 1.0 : (price > 10 ? 0.20 : 0.28);
-  const originalPrice = Number((price * (1 + markup)).toFixed(2));
-  const discountPercent = Math.max(12, Math.round(((originalPrice - price) / originalPrice) * 100));
+  const originalPrice = isUnpriced ? 0 : Number((price * (1 + markup)).toFixed(2));
+  const discountPercent = isUnpriced || originalPrice <= price
+    ? 0
+    : Math.max(12, Math.round(((originalPrice - price) / originalPrice) * 100));
 
   return {
     salePrice: price,
@@ -345,6 +347,7 @@ function parsePriceAndUnits(rawName: string, rawPrice?: string): {
     unitDescription: unitDesc,
     dealType,
     dealBadge,
+    isUnpricedPromo: isUnpriced,
   };
 }
 

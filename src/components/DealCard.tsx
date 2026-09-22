@@ -21,37 +21,35 @@ export default function DealCard({
   competingCount,
   onOpenComparison,
 }: DealCardProps) {
-  const badgeText = (deal as any).promoBadgeText || deal.dealBadge || '';
-  const title = deal.title || '';
-  const combined = `${title} ${badgeText}`.toUpperCase();
+  const ocrText = deal.ocrTranscript || '';
+  const badgeText = deal.promoBadgeText || deal.dealBadge || '';
+  const searchString = `${ocrText} ${deal.title || ''} ${badgeText}`.trim();
 
-  let effectivePrice = deal.salePrice;
+  // 1. Dynamic Multi-Buy Calculation (Mathematically handles any X for $Y)
+  let unitPrice = deal.salePrice;
   let multiBuySubtitle: string | null = null;
 
-  const multiMatch = combined.match(/(\d+)\s*(?:FOR|\/)\s*\$?(\d+(?:\.\d{2})?)/);
-  if (multiMatch) {
-    const qty = parseInt(multiMatch[1], 10);
-    const total = parseFloat(multiMatch[2]);
-    if (qty > 1 && total > 0) {
-      effectivePrice = Number((total / qty).toFixed(2));
-      multiBuySubtitle = `${qty} for $${total.toFixed(2)} ($${effectivePrice.toFixed(2)} ea)`;
+  if (deal.bundleQuantity && deal.bundleQuantity > 1 && (deal as any).bundleTotalPrice) {
+    unitPrice = Number(((deal as any).bundleTotalPrice / deal.bundleQuantity).toFixed(2));
+    multiBuySubtitle = `${deal.bundleQuantity} for $${(deal as any).bundleTotalPrice.toFixed(2)} ($${unitPrice.toFixed(2)} ea)`;
+  } else {
+    const match = searchString.match(/(\d+)\s*(?:for|\/)\s*\$?(\d+(?:\.\d{2})?)/i);
+    if (match) {
+      const qty = parseInt(match[1], 10);
+      const total = parseFloat(match[2]);
+      if (qty > 1 && total > 0) {
+        unitPrice = Number((total / qty).toFixed(2));
+        multiBuySubtitle = `${qty} for $${total.toFixed(2)} ($${unitPrice.toFixed(2)} ea)`;
+      }
     }
-  } else if (deal.bundleQuantity && deal.bundleQuantity > 1 && (deal as any).bundleTotalPrice) {
-    effectivePrice = Number(((deal as any).bundleTotalPrice / deal.bundleQuantity).toFixed(2));
-    multiBuySubtitle = `${deal.bundleQuantity} for $${(deal as any).bundleTotalPrice.toFixed(2)} ($${effectivePrice.toFixed(2)} ea)`;
   }
 
-  const isBogo =
+  // 2. Dynamic Unpriced Promotion Detection
+  const isUnpricedPromo =
     (deal as any).isUnpricedPromo ||
-    effectivePrice === 0 ||
-    combined.includes('BUY 1 GET 2') ||
-    combined.includes('BUY 1 GET 1') ||
-    combined.includes('BUY ONE, GET ONE') ||
-    combined.includes('BUY THREE, GET ONE') ||
-    combined.includes('50% OFF') ||
-    deal.dealType === 'bogo';
-
-  const isUnpricedBogoDisplay = isBogo && (effectivePrice === 0 || effectivePrice === 3.99);
+    !unitPrice ||
+    unitPrice === 0 ||
+    /bogo|buy\s+\d+\s+get|free|\d+%\s+off/i.test(searchString);
 
   const handleAction = () => {
     if (onAddToList) {
@@ -72,6 +70,7 @@ export default function DealCard({
         </div>
       )}
 
+      {/* Header: Store Name & Valid Date */}
       <div className="flex items-center justify-between mb-2">
         <span
           className="text-[10px] font-black uppercase px-2.5 py-1 rounded-md text-white tracking-wider"
@@ -84,6 +83,7 @@ export default function DealCard({
         )}
       </div>
 
+      {/* Circular Image Tile */}
       {(deal as any).imageUrl && (
         <div className="w-full h-44 rounded-xl overflow-hidden mb-3 bg-slate-50 flex items-center justify-center border border-slate-100 relative">
           <img
@@ -101,6 +101,7 @@ export default function DealCard({
         </div>
       )}
 
+      {/* Product Title & Dynamic Promo Badge */}
       <div className="mb-3">
         {badgeText && (
           <span className="inline-block bg-amber-500 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded uppercase tracking-wider mb-1.5 shadow-2xs">
@@ -115,24 +116,25 @@ export default function DealCard({
         )}
       </div>
 
+      {/* Dynamic Price Display */}
       <div className="mt-auto pt-2 border-t border-slate-100">
-        {isUnpricedBogoDisplay ? (
+        {isUnpricedPromo && !multiBuySubtitle ? (
           <div className="my-1">
             <span className="inline-block bg-amber-100 text-amber-900 font-extrabold text-xs px-2 py-1 rounded-md uppercase tracking-wider border border-amber-200">
-              {badgeText || 'SPECIAL PROMOTION'}
+              {badgeText || 'SPECIAL OFFER'}
             </span>
             <p className="text-xs font-semibold text-slate-500 mt-1">
-              Price varies in-store • Discount at register
+              Base price varies in-store • Discount at register
             </p>
           </div>
         ) : (
           <div>
             <div className="flex items-baseline space-x-2">
               <span className="text-2xl font-black text-slate-900 font-mono">
-                ${effectivePrice.toFixed(2)}
+                ${unitPrice.toFixed(2)}
               </span>
 
-              {deal.discountPercent > 0 && deal.discountPercent !== 22 && deal.discountPercent !== 20 && deal.originalPrice > effectivePrice && (
+              {deal.discountPercent > 0 && deal.originalPrice > unitPrice && (
                 <>
                   <span className="text-xs text-slate-400 line-through font-mono">
                     ${deal.originalPrice.toFixed(2)}
@@ -150,12 +152,13 @@ export default function DealCard({
               </p>
             ) : (
               <p className="text-xs text-slate-500 mt-0.5">
-                Normalized Unit Cost: <span className="font-semibold text-slate-700">{deal.unitPrice || `$${effectivePrice.toFixed(2)} each`}</span>
+                Normalized Unit Cost: <span className="font-semibold text-slate-700">{deal.unitPrice || `$${unitPrice.toFixed(2)} each`}</span>
               </p>
             )}
           </div>
         )}
 
+        {/* Action Buttons: Compare & Add to List */}
         <div className="mt-3 pt-2 flex items-center justify-between">
           {competingCount && competingCount > 1 && onOpenComparison ? (
             <button
