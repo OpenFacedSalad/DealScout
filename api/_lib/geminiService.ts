@@ -360,25 +360,32 @@ async function ocrVerifyDealTile(
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3500);
+    // INCREASED TIMEOUT: 8 seconds to handle slow grocery image CDNs
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
+    console.log(`[OCR] Fetching image for: ${deal.title}`);
     const res = await fetch(deal.imageUrl, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'DealScout/2.5 (GroceryDealMatcher/ImageOCR)',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         Accept: 'image/*,*/*',
       },
     });
 
     clearTimeout(timeoutId);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.warn(`[OCR] Image fetch failed for ${deal.title} - Status: ${res.status}`);
+      return null;
+    }
 
     const arrayBuffer = await res.arrayBuffer();
     const base64Data = Buffer.from(arrayBuffer).toString('base64');
     const contentType = res.headers.get('content-type') || 'image/jpeg';
 
-    const modelsToTry = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.8-flash'];
+    // Use active SDK models
+    const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
     let response: any = null;
+
     for (const model of modelsToTry) {
       try {
         response = await ai.models.generateContent({
@@ -393,7 +400,7 @@ async function ocrVerifyDealTile(
             {
               text: `Analyze this grocery store circular ad image tile with high-accuracy OCR:
 1. Examine all visual text, yellow/red badges, bursts, banners, and price stamps.
-2. Check for multi-buys (e.g., "2 for $10", "2 for $4", "3 for $5", "4 for $10").
+2. Check for multi-buys (e.g., "2 for $10", "2 for $4", "3 for $5", "4 for $10", "10 for $10").
    - If found:
      bundleQuantity: the integer count (e.g., 2)
      bundleTotalPrice: the total bundle cost (e.g., 10.00)
@@ -419,12 +426,14 @@ Respond ONLY with valid JSON matching this schema:
           },
         });
         if (response?.text) break;
-      } catch {
-        // Try next model tier
+      } catch (modelErr: any) {
+        // Continue to next model tier
       }
     }
 
-    if (!response?.text) return null;
+    if (!response?.text) {
+      return null;
+    }
 
     const parsed = JSON.parse(response.text) as OCRVerifyResult;
 
@@ -457,7 +466,7 @@ Respond ONLY with valid JSON matching this schema:
       };
     }
   } catch (err) {
-    console.warn(`[OCR Verifier] Could not verify deal "${deal.title}":`, err);
+    // OCR failed silently
   }
 
   return null;
@@ -466,31 +475,44 @@ Respond ONLY with valid JSON matching this schema:
 /**
  * Intelligent Heuristic Selector:
  * Evaluates aggregated deals and runs targeted Gemini Vision OCR
- * only on deals meeting suspicious pricing patterns.
+ * on items with suspected unparsed multi-buys or unpriced promo badges.
  */
 export async function enrichDealsWithOCR(
   ai: GoogleGenAI,
   deals: DealItem[]
 ): Promise<DealItem[]> {
-  // Trigger Heuristics:
-  // 1. Whole-dollar pricing >= $3.00 (e.g., $4.00, $7.00, $10.00) indicates an unparsed bundle.
-  // 2. Unpriced or $0.00 sale price indicates an unparsed BOGO or banner promo.
   const candidateDeals = deals.filter((deal) => {
     if (!deal.imageUrl) return false;
-    const isWholeDollar = deal.salePrice >= 3 && Math.floor(deal.salePrice) === deal.salePrice;
+    // Skip if already parsed as multi-buy
+    if (deal.bundleQuantity && deal.bundleQuantity > 1 && deal.bundleTotalPrice) return false;
+
+    const titleLower = (deal.title || '').toLowerCase();
+    const badgeLower = (deal.dealBadge || deal.promoBadgeText || '').toLowerCase();
+    const text = `${titleLower} ${badgeLower}`;
+    
+    // Explicit bundle/bogo keywords in title/badge
+    const hasBundleClue = /\b(\d+\s*(?:for|\/)\s*\$?\d+|bogo|buy\s*\d+|free|\d+%\s*off)\b/i.test(text);
+    // Typical packaged grocery whole dollar multi-buys ($2, $3, $4, $5, $6, $10)
+    const isWholeDollarSnackOrPantry =
+      deal.salePrice >= 2 &&
+      deal.salePrice <= 10 &&
+      Math.floor(deal.salePrice) === deal.salePrice &&
+      ['pantry_snacks', 'beverages', 'frozen', 'dairy_eggs', 'produce'].includes(deal.category);
     const isUnpriced = !deal.salePrice || deal.salePrice === 0;
-    return isWholeDollar || isUnpriced;
+
+    return hasBundleClue || isWholeDollarSnackOrPantry || isUnpriced;
   });
 
   if (candidateDeals.length === 0) return deals;
 
-  // Process up to 8 candidate deals concurrently with Promise.all
-  const ocrResults = await Promise.all(
-    candidateDeals.slice(0, 8).map(async (deal) => {
-      const update = await ocrVerifyDealTile(ai, deal);
-      return { id: deal.id, update };
-    })
-  );
+  // Process candidate deals in controlled sequence (max 4) to avoid rate limits
+  const ocrResults: Array<{ id: string; update: Partial<DealItem> | null }> = [];
+  const targets = candidateDeals.slice(0, 4);
+
+  for (const deal of targets) {
+    const update = await ocrVerifyDealTile(ai, deal);
+    ocrResults.push({ id: deal.id, update });
+  }
 
   const updatesMap = new Map<string, Partial<DealItem>>(
     ocrResults
