@@ -31,7 +31,12 @@ export default function DealCard({
   const isOrganic = deal.qualityTier === 'organic' || deal.tags.includes('organic');
   const isBogo = deal.dealType === 'bogo';
   const isDigitalCoupon = deal.dealType === 'digital_coupon';
-  const isMultiBuy = deal.dealType === 'multi_buy';
+  const isUnpricedPromo = Boolean(
+    deal.isUnpricedPromo || (deal.salePrice === 0 && (isBogo || deal.title.toLowerCase().includes('bogo')))
+  );
+  const bundleQty = deal.bundleQuantity && deal.bundleQuantity > 1 ? deal.bundleQuantity : null;
+  const isMultiBuy = deal.dealType === 'multi_buy' || Boolean(bundleQty && bundleQty > 1);
+  const bundleTotal = deal.bundleTotalPrice != null ? deal.bundleTotalPrice : (bundleQty ? deal.salePrice * bundleQty : null);
 
   return (
     <div
@@ -79,12 +84,17 @@ export default function DealCard({
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
+          {isUnpricedPromo && (
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500 text-white shadow-2xs">
+              {isBogo || deal.title.toLowerCase().includes('bogo') ? 'BUY 1 GET 1 FREE' : 'SPECIAL OFFER'}
+            </span>
+          )}
           {deal.dealBadge && (
             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-rose-50 text-rose-700 border border-rose-200">
               {deal.dealBadge}
             </span>
           )}
-          {isBogo && (
+          {isBogo && !isUnpricedPromo && (
             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-800 border border-amber-200">
               BOGO FREE
             </span>
@@ -139,28 +149,54 @@ export default function DealCard({
         </div>
 
         <div className="mt-auto pt-2">
-          <div className="flex items-baseline space-x-2">
-            <span className="text-2xl font-black text-slate-900 tracking-tight">
-              ${deal.salePrice.toFixed(2)}
-            </span>
-            {deal.originalPrice > deal.salePrice && (
-              <span className="text-xs text-slate-400 line-through font-medium">
-                ${deal.originalPrice.toFixed(2)}
-              </span>
-            )}
-            {deal.discountPercent > 0 && (
-              <span className="px-1.5 py-0.5 rounded text-[11px] font-bold bg-rose-100 text-rose-700">
-                -{deal.discountPercent}%
-              </span>
-            )}
-          </div>
+          {isUnpricedPromo ? (
+            <div>
+              <div className="flex items-baseline space-x-2">
+                <span className="text-lg sm:text-xl font-black text-slate-800 tracking-tight">
+                  Price varies in-store
+                </span>
+              </div>
+              <div className="mt-2 py-1.5 px-2.5 rounded-lg bg-amber-50/70 border border-amber-200/60 flex items-center justify-between text-xs">
+                <span className="text-amber-800 font-medium text-[11px]">Normalized Unit Cost:</span>
+                <span className="font-bold text-amber-900 text-xs">
+                  Discount applied at register
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div className="flex items-baseline flex-wrap gap-2">
+                <span className="text-2xl font-black text-slate-900 tracking-tight">
+                  ${deal.salePrice.toFixed(2)}{bundleQty && bundleQty > 1 ? ' ea' : ''}
+                </span>
+                {deal.originalPrice > deal.salePrice && deal.discountPercent > 0 && (
+                  <span className="text-xs text-slate-400 line-through font-medium">
+                    ${deal.originalPrice.toFixed(2)}
+                  </span>
+                )}
+                {deal.discountPercent > 0 && deal.originalPrice > deal.salePrice && (
+                  <span className="px-1.5 py-0.5 rounded text-[11px] font-bold bg-rose-100 text-rose-700">
+                    -{deal.discountPercent}%
+                  </span>
+                )}
+              </div>
 
-          <div className="mt-2 py-1.5 px-2.5 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-between text-xs">
-            <span className="text-slate-500 font-medium text-[11px]">Normalized Unit Cost:</span>
-            <span className="font-black text-emerald-700 font-mono text-xs">
-              {deal.unitPrice}
-            </span>
-          </div>
+              {bundleQty && bundleQty > 1 && (
+                <div className="mt-1.5">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-purple-50 text-purple-800 border border-purple-200">
+                    {bundleQty} for ${(bundleTotal ?? (deal.salePrice * bundleQty)).toFixed(2)} (${deal.salePrice.toFixed(2)} each)
+                  </span>
+                </div>
+              )}
+
+              <div className="mt-2 py-1.5 px-2.5 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-between text-xs">
+                <span className="text-slate-500 font-medium text-[11px]">Normalized Unit Cost:</span>
+                <span className="font-black text-emerald-700 font-mono text-xs">
+                  {deal.unitPrice}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

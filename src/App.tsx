@@ -332,7 +332,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased">
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-slate-50 text-slate-900 flex flex-col antialiased">
       <NotificationOptInBanner />
       <Header
         activeTab={activeTab}

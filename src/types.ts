@@ -79,6 +79,10 @@ export interface DealItem {
   tags: string[];
   brand?: string;
   qualityTier?: QualityTier;
+  bundleQuantity?: number;
+  bundleTotalPrice?: number | null;
+  isUnpricedPromo?: boolean;
+  hasExplicitOriginalPrice?: boolean;
 }
 
 export interface UserLocation {

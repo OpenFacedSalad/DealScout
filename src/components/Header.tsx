@@ -248,8 +248,8 @@ export default function Header({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center justify-between py-2 border-t border-slate-100">
-          <nav className="flex items-center space-x-2 sm:space-x-4">
+        <div className="flex items-center justify-between py-2 border-t border-slate-100 max-w-full overflow-x-auto overflow-y-hidden scrollbar-none">
+          <nav className="flex items-center space-x-2 sm:space-x-4 min-w-max">
             <button
               onClick={() => setActiveTab('circulars')}
               className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition ${

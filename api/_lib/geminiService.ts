@@ -82,6 +82,22 @@ export const dealsResponseSchema: Schema = {
         type: Type.STRING,
         enum: ['budget', 'standard', 'premium', 'organic'],
       },
+      bundleQuantity: {
+        type: Type.INTEGER,
+        description: 'Number of units required for bundle price, default 1',
+      },
+      bundleTotalPrice: {
+        type: Type.NUMBER,
+        description: 'Total bundle package price if multi-buy (e.g. 7.00 for 2 for $7), or null',
+      },
+      isUnpricedPromo: {
+        type: Type.BOOLEAN,
+        description: 'True if BOGO, percent off, or promotion has no specific base dollar amount listed',
+      },
+      hasExplicitOriginalPrice: {
+        type: Type.BOOLEAN,
+        description: 'True ONLY if a regular/crossed-out price is explicitly printed in the ad',
+      },
     },
     required: [
       'id',
@@ -157,6 +173,102 @@ function parseJsonFromText<T>(text: string | null | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+const NON_GROCERY_KEYWORDS = [
+  'vtech', 'leapfrog', 'lego', 'toy', 'doll', 'plush', 'playset',
+  'action figure', 'board game', 'apparel', 'shirt', 'pants', 'towel',
+  'jeans', 'shoes', 'boots', 't-shirt', 'hoodie', 'socks', 'underwear',
+  'tv', 'television', 'headphone', 'earbuds', 'ipad', 'tablet',
+  'laptop', 'console', 'nintendo', 'playstation', 'xbox',
+  'blender', 'vacuum', 'microwave', 'patio', 'furniture', 'rug',
+  'doors opening', 'grand opening', 'hiring', 'now open', 'weekly ad'
+];
+
+/**
+ * Programmatic Post-Processing Sanitizer.
+ * Enforces strict grocery-only filtration, drops non-grocery general merchandise,
+ * purges unpriced banners/promotions, normalizes multi-buys, and eliminates hallucinated discounts.
+ */
+export function sanitizeAndValidateDeals(rawDeals: DealItem[]): DealItem[] {
+  const cleanedDeals = (rawDeals || [])
+    .filter((deal: any) => {
+      if (!deal || !deal.title) return false;
+
+      const titleLower = deal.title.toLowerCase();
+      const subLower = (deal.subtitle || '').toLowerCase();
+      const combinedText = `${titleLower} ${subLower}`;
+
+      // 1. Drop non-grocery merchandise
+      if (
+        NON_GROCERY_KEYWORDS.some((keyword) => {
+          if (keyword === 'towel' && combinedText.includes('paper towel')) {
+            return false;
+          }
+          return combinedText.includes(keyword);
+        })
+      ) {
+        return false;
+      }
+
+      // 2. Drop non-grocery category tags
+      if (deal.category === 'household' && (combinedText.includes('toy') || combinedText.includes('item'))) {
+        const validHousehold = ['paper', 'towel', 'tissue', 'soap', 'detergent', 'cleaner', 'trash', 'foil', 'bag'];
+        if (!validHousehold.some((w) => combinedText.includes(w))) {
+          return false;
+        }
+      }
+
+      // 3. Drop unpriced promotions or zero-price entries
+      if (!deal.salePrice || deal.salePrice <= 0 || deal.isUnpricedPromo) {
+        return false;
+      }
+
+      // 4. Drop produce/grocery extreme price anomalies
+      if (deal.category === 'produce' && deal.salePrice > 20.0) {
+        return false;
+      }
+
+      return true;
+    })
+    .map((deal: any) => {
+      // Enforce multi-buy division (e.g. 2 for $7 -> $3.50 ea)
+      if (deal.bundleQuantity && deal.bundleQuantity > 1 && deal.bundleTotalPrice) {
+        deal.salePrice = Number((deal.bundleTotalPrice / deal.bundleQuantity).toFixed(2));
+        deal.unitDescription = `${deal.bundleQuantity} for $${deal.bundleTotalPrice.toFixed(2)}`;
+        deal.dealType = 'multi_buy';
+      }
+
+      const multiBuyMatch = deal.title.match(/(\d+)\s*(?:for|\/)\s*\$?(\d+(?:\.\d{2})?)/i);
+      if (multiBuyMatch && (!deal.bundleQuantity || deal.bundleQuantity === 1)) {
+        const qty = parseInt(multiBuyMatch[1], 10);
+        const total = parseFloat(multiBuyMatch[2]);
+        if (qty > 1 && total > 0) {
+          deal.bundleQuantity = qty;
+          deal.bundleTotalPrice = total;
+          deal.salePrice = Number((total / qty).toFixed(2));
+          deal.unitDescription = `${qty} for $${total.toFixed(2)}`;
+          deal.dealType = 'multi_buy';
+        }
+      }
+
+      // Recalculate normalized unit cost if single unit
+      if (!deal.normalizedUnitCost || isNaN(deal.normalizedUnitCost) || deal.normalizedUnitCost === 0) {
+        deal.normalizedUnitCost = deal.salePrice;
+        deal.normalizedUnitType = deal.normalizedUnitType || 'unit';
+        deal.unitPrice = `$${deal.salePrice.toFixed(2)} / ${deal.normalizedUnitType}`;
+      }
+
+      // Strip fabricated discounts
+      if (!deal.hasExplicitOriginalPrice || deal.originalPrice <= deal.salePrice) {
+        deal.originalPrice = deal.salePrice;
+        deal.discountPercent = 0;
+      }
+
+      return deal;
+    });
+
+  return cleanedDeals;
 }
 
 /**
@@ -263,6 +375,34 @@ Based on current weekly grocery circulars, flyers, and advertised specials for s
 Specifically, search for:\n${searchInstructions}\n\nTarget Supermarkets:
 ${JSON.stringify(storeSummary, null, 2)}
 
+STRICT EXCLUSIONS & FILTERS:
+1. FOOD & GROCERY ONLY:
+   Extract ONLY edible food, beverages, and consumable grocery essentials.
+   STRICTLY IGNORE and DROP all non-grocery departments:
+   - NO toys, children's learning sets (e.g., VTech, LeapFrog, LEGO, Barbie)
+   - NO apparel, shoes, or clothing
+   - NO electronics, TVs, video games, or appliances
+   - NO patio, furniture, or home decor
+2. MANDATORY DOLLAR PRICE (NO GUESSING):
+   ONLY extract items that display an explicit, printed dollar price (e.g., '$2.99', '$4.49/lb', '2 for $7').
+   IF A BANNER ONLY SAYS 'Up to 30% off', 'Save 20%', 'Special Value', OR 'BOGO' WITHOUT A SPECIFIC BASE DOLLAR PRICE, DO NOT EXTRACT IT. IGNORE IT COMPLETELY.
+   NEVER invent, guess, or default a price to $3.99 or any other number.
+
+Strict Extraction & Pricing Rules:
+3. BAN BANNER HEADERS:
+   Never parse store announcements, grand openings (e.g. "Doors opening in College Station"), hiring notices, or weekly circular headers as product deals. Every item MUST be an edible food or household consumer product.
+4. ZERO HALLUCINATED DISCOUNTS:
+   If an item does not explicitly show a crossed-out regular price (e.g., "Was $4.99"), set originalPrice equal to salePrice, discountPercent to 0, and hasExplicitOriginalPrice to false. Never invent or reverse-engineer discounts (e.g., 22%).
+5. MULTI-BUY ARITHMETIC:
+   When an ad displays "2 for $7" or "3 for $10":
+   - Set bundleQuantity: 2
+   - Set bundleTotalPrice: 7.00
+   - Compute salePrice: 3.50 (bundleTotalPrice divided by bundleQuantity)
+   - Set unitDescription: "2 for $7 ($3.50 ea)"
+   - Set dealType: 'multi_buy'
+6. STRICT CONSUMER UNIT MATCHING:
+   Apples, produce, and meats must be priced per standard consumer units ($/lb, $/oz, or per piece), NEVER whole agricultural crates or bulk cases.
+
 Extract authentic advertised items, sales, and butcher shop specials.
 Return ONLY a valid JSON array of deal objects matching DealItem schema.
 `;
@@ -288,8 +428,11 @@ Return ONLY a valid JSON array of deal objects matching DealItem schema.
           if (result?.text && result.text.trim()) {
             const parsed = parseJsonFromText<DealItem[]>(result.text, []);
             if (Array.isArray(parsed) && parsed.length > 0) {
-              aiDeals = parsed;
-              break;
+              const sanitized = sanitizeAndValidateDeals(parsed);
+              if (sanitized.length > 0) {
+                aiDeals = sanitized;
+                break;
+              }
             }
           }
         } catch {
@@ -351,15 +494,17 @@ Return ONLY a valid JSON array of deal objects matching DealItem schema.
     seenDealIds.add(d.id);
   });
 
+  const sanitizedCombinedDeals = sanitizeAndValidateDeals(combinedDeals);
+
   const counts: Record<string, number> = {};
-  combinedDeals.forEach((d) => {
+  sanitizedCombinedDeals.forEach((d) => {
     counts[d.storeId] = (counts[d.storeId] || 0) + 1;
   });
   finalStores.forEach((s) => {
     s.totalDealsCount = counts[s.id] || 0;
   });
 
-  const result = { stores: finalStores, deals: combinedDeals };
+  const result = { stores: finalStores, deals: sanitizedCombinedDeals };
   circularsCache.set(cacheKey, { timestamp: Date.now(), data: result });
   return result;
 }
@@ -381,15 +526,43 @@ export async function parseFlyerWithAI(
 Analyze this physical weekly circular flyer or promotional PDF for "${store.name}".
 Extract EVERY advertised grocery product special, butcher meat cut, produce price, and BOGO deal shown.
 
+STRICT EXCLUSIONS & FILTERS:
+1. FOOD & GROCERY ONLY:
+   Extract ONLY edible food, beverages, and consumable grocery essentials.
+   STRICTLY IGNORE and DROP all non-grocery departments:
+   - NO toys, children's learning sets (e.g., VTech, LeapFrog, LEGO, Barbie)
+   - NO apparel, shoes, or clothing
+   - NO electronics, TVs, video games, or appliances
+   - NO patio, furniture, or home decor
+2. MANDATORY DOLLAR PRICE (NO GUESSING):
+   ONLY extract items that display an explicit, printed dollar price (e.g., '$2.99', '$4.49/lb', '2 for $7').
+   IF A BANNER ONLY SAYS 'Up to 30% off', 'Save 20%', 'Special Value', OR 'BOGO' WITHOUT A SPECIFIC BASE DOLLAR PRICE, DO NOT EXTRACT IT. IGNORE IT COMPLETELY.
+   NEVER invent, guess, or default a price to $3.99 or any other number.
+
+Strict Extraction & Pricing Rules:
+3. BAN BANNER HEADERS:
+   Never parse store announcements, grand openings (e.g. "Doors opening in College Station"), hiring notices, or weekly circular headers as product deals. Every item MUST be an edible food or household consumer product.
+4. ZERO HALLUCINATED DISCOUNTS:
+   If an item does not explicitly show a crossed-out regular price (e.g., "Was $4.99"), set originalPrice equal to salePrice, discountPercent to 0, and hasExplicitOriginalPrice to false. Never invent or reverse-engineer discounts (e.g., 22%).
+5. MULTI-BUY ARITHMETIC:
+   When an ad displays "2 for $7" or "3 for $10":
+   - Set bundleQuantity: 2
+   - Set bundleTotalPrice: 7.00
+   - Compute salePrice: 3.50 (bundleTotalPrice divided by bundleQuantity)
+   - Set unitDescription: "2 for $7 ($3.50 ea)"
+   - Set dealType: 'multi_buy'
+6. STRICT CONSUMER UNIT MATCHING:
+   Apples, produce, and meats must be priced per standard consumer units ($/lb, $/oz, or per piece), NEVER whole agricultural crates or bulk cases.
+
 Requirements for each extracted item:
 1. "title": Exact item description from the circular.
-2. "originalPrice": Estimated or stated pre-sale price.
-3. "salePrice": True promotional package sale price.
-4. "discountPercent": Percentage discount integer.
+2. "originalPrice": Exact stated pre-sale price if printed; if not printed, set equal to salePrice.
+3. "salePrice": True single-unit promotional package or per-pound sale price (e.g., $3.50 for 2-for-$7 deal).
+4. "discountPercent": Percentage discount integer, or 0 if pre-sale price is not explicitly printed.
 5. "unitPrice": Formatted normalized unit price string (e.g., "$3.49 / lb", "$0.20 / egg", "$2.49 / 16 oz").
 6. "normalizedUnitCost": Precise numeric float for mathematical sorting.
 7. "normalizedUnitType": One of ['lb', 'oz', 'unit', 'gallon', 'count', 'dozen'].
-8. "unitDescription": Brief explanation (e.g. "per pound", "per egg").
+8. "unitDescription": Brief explanation (e.g. "per pound", "per egg", "2 for $7 ($3.50 ea)").
 9. "dealType": One of ['sale', 'bogo', 'digital_coupon', 'multi_buy'].
 10. "dealBadge": Visual highlight text if present (e.g. "BUTCHER CUT", "BUY 1 GET 1", "CLIP COUPON").
 11. "genericProductGroup": Normalized commodity key for cross-store comparison matching:
@@ -401,6 +574,10 @@ Requirements for each extracted item:
 15. "storeLogoText": Set to "${store.logoText}".
 16. "validUntil": Extract valid flyer end date, or set to next Tuesday/Wednesday.
 17. "inStock": true.
+18. "bundleQuantity": Integer (default 1, e.g. 2 for "2 for $7").
+19. "bundleTotalPrice": Total price for bundle (e.g. 7.00), or null.
+20. "isUnpricedPromo": Boolean (false for items with valid dollar prices).
+21. "hasExplicitOriginalPrice": Boolean (true ONLY if regular/crossed-out price is printed).
 `;
 
   const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
@@ -431,8 +608,9 @@ Requirements for each extracted item:
   }
 
   const parsed = response?.text ? parseJsonFromText<DealItem[]>(response.text, []) : [];
+  const sanitized = sanitizeAndValidateDeals(parsed);
 
-  return parsed.map((item, idx) => ({
+  return sanitized.map((item, idx) => ({
     ...item,
     id: item.id || `scanned-${store.id}-${Date.now()}-${idx}`,
     storeId: store.id,

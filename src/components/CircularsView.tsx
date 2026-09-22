@@ -172,7 +172,7 @@ export default function CircularsView({
         </div>
       </div>
 
-      <div className="flex items-center space-x-2 overflow-x-auto pb-2 scrollbar-none">
+      <div className="flex items-center space-x-2 overflow-x-auto overflow-y-hidden max-w-full pb-2 scrollbar-none">
         <button
           onClick={() => setSelectedStoreId('all')}
           className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap transition shadow-2xs ${
@@ -307,7 +307,7 @@ export default function CircularsView({
           </div>
         </div>
 
-        <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 scrollbar-none text-xs">
+        <div className="flex items-center space-x-1.5 overflow-x-auto overflow-y-hidden max-w-full pb-1 scrollbar-none text-xs">
           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider pr-1">
             Deals:
           </span>
@@ -363,7 +363,7 @@ export default function CircularsView({
           </button>
         </div>
 
-        <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 scrollbar-none text-xs border-t border-slate-100 pt-2.5">
+        <div className="flex items-center space-x-1.5 overflow-x-auto overflow-y-hidden max-w-full pb-1 scrollbar-none text-xs border-t border-slate-100 pt-2.5">
           {CATEGORIES.map((cat) => (
             <button
               key={cat.id}
