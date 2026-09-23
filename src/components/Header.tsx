@@ -91,9 +91,11 @@ export default function Header({
         <div className="py-3 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 sm:border-none">
           {/* Brand Identity */}
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 flex items-center justify-center text-white shadow-md shadow-emerald-700/20">
-              <Sparkles className="w-5 h-5 text-emerald-100" />
-            </div>
+            <img
+              src="/icon.svg"
+              alt="DealScout Logo"
+              className="w-10 h-10 rounded-xl shadow-md shadow-emerald-950/20 object-contain shrink-0"
+            />
             <div>
               <div className="flex items-center space-x-2">
                 <span className="text-xl font-black tracking-tight text-slate-900 font-sans">

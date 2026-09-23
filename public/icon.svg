@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Background -->
+  <rect width="512" height="512" fill="#0f172a" rx="112" />
+  
+  <!-- Left Price Tag (Tilted right) -->
+  <g transform="translate(140, 120) rotate(15)">
+    <!-- Main Tag Body -->
+    <path d="M 0,60 L 60,0 L 140,0 L 140,240 L 0,240 Z" fill="#10b981" />
+    <!-- Tag String Hole -->
+    <circle cx="70" cy="40" r="12" fill="#0f172a" />
+    <!-- Binocular Lens / Scanning element -->
+    <circle cx="70" cy="150" r="40" fill="#0f172a" opacity="0.3" />
+    <circle cx="70" cy="150" r="30" fill="#059669" />
+  </g>
+
+  <!-- Right Price Tag (Tilted left) -->
+  <g transform="translate(232, 160) rotate(-15)">
+    <!-- Main Tag Body -->
+    <path d="M 0,0 L 80,0 L 140,60 L 140,240 L 0,240 Z" fill="#059669" />
+    <!-- Tag String Hole -->
+    <circle cx="70" cy="40" r="12" fill="#0f172a" />
+    <!-- Binocular Lens / Scanning element -->
+    <circle cx="70" cy="150" r="40" fill="#0f172a" opacity="0.3" />
+    <circle cx="70" cy="150" r="30" fill="#10b981" />
+  </g>
+</svg>
