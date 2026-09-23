@@ -6,7 +6,6 @@ import {
   ShoppingCart,
   Layers,
   Scale,
-  Sparkles,
   ChevronDown,
   Loader2,
   Code2,
@@ -15,7 +14,9 @@ import {
   X,
   WifiOff,
   Camera,
+  Bell,
 } from 'lucide-react';
+import Logo from './Logo';
 import { ActiveTab, RadiusOption, UserLocation } from '../types';
 import { usePWAInstall } from '../hooks/usePWAInstall';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
@@ -33,7 +34,7 @@ interface HeaderProps {
   comparisonCount: number;
   shoppingListCount: number;
   totalSavings: number;
-  onOpenDocViewer: (type: 'design' | 'code') => void;
+  onOpenDocViewer: (type: 'design' | 'code' | 'devtools') => void;
 }
 
 const RADIUS_OPTIONS: RadiusOption[] = [1, 5, 10, 25];
@@ -90,12 +91,8 @@ export default function Header({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="py-3 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 sm:border-none">
           {/* Brand Identity */}
-          <div className="flex items-center space-x-3">
-            <img
-              src="/icon.svg"
-              alt="DealScout Logo"
-              className="w-10 h-10 rounded-xl shadow-md shadow-emerald-950/20 object-contain shrink-0"
-            />
+          <div className="flex items-center">
+            <Logo className="w-9 h-9 mr-2 drop-shadow-sm" />
             <div>
               <div className="flex items-center space-x-2">
                 <span className="text-xl font-black tracking-tight text-slate-900 font-sans">
@@ -226,6 +223,16 @@ export default function Header({
                   >
                     <Code2 className="w-3.5 h-3.5 text-teal-600" />
                     <span>Code Structure Spec</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsDocDropdownOpen(false);
+                      onOpenDocViewer('devtools');
+                    }}
+                    className="w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center space-x-2"
+                  >
+                    <Bell className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Dev Tools & Push</span>
                   </button>
                   <div className="my-1 border-t border-slate-100" />
                   <a

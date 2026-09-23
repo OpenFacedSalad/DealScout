@@ -28,28 +28,6 @@
       }
     </style>
     <title>DealScout - Grocery Circulars & Unit Price Matcher</title>
-
-    <script>
-      // Immediately unregister any stale service workers and clear cache storage
-      (function() {
-        try {
-          if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.getRegistrations().then(function(regs) {
-              for (var i = 0; i < regs.length; i++) {
-                regs[i].unregister();
-              }
-            }).catch(function() {});
-            if ('caches' in window) {
-              caches.keys().then(function(keys) {
-                for (var j = 0; j < keys.length; j++) {
-                  caches.delete(keys[j]);
-                }
-              }).catch(function() {});
-            }
-          }
-        } catch (e) {}
-      })();
-    </script>
   </head>
   <body class="bg-slate-50 text-slate-900 antialiased selection:bg-emerald-100 selection:text-emerald-900 min-h-screen">
     <div id="root">

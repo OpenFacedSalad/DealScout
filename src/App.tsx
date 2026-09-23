@@ -93,7 +93,7 @@ export default function App() {
   const [isLocationModalOpen, setIsLocationModalOpen] = useState<boolean>(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
   const [isDocModalOpen, setIsDocModalOpen] = useState<boolean>(false);
-  const [activeDocType, setActiveDocType] = useState<'design' | 'code'>('design');
+  const [activeDocType, setActiveDocType] = useState<'design' | 'code' | 'devtools'>('design');
   const [selectedComparisonGroup, setSelectedComparisonGroup] = useState<ComparisonGroup | null>(null);
 
   useEffect(() => {
@@ -363,7 +363,7 @@ export default function App() {
     []
   );
 
-  const handleOpenDocModal = (type: 'design' | 'code') => {
+  const handleOpenDocModal = (type: 'design' | 'code' | 'devtools') => {
     setActiveDocType(type);
     setIsDocModalOpen(true);
   };
