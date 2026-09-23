@@ -253,7 +253,7 @@ export function inferGenericProductGroup(title: string): string {
 }
 
 // Format unit price and unit cost
-function parsePriceAndUnits(rawName: string, rawPrice?: string): {
+function parsePriceAndUnits(rawName: string, rawPrice?: string, description?: string): {
   salePrice: number;
   originalPrice: number;
   discountPercent: number;
@@ -265,37 +265,50 @@ function parsePriceAndUnits(rawName: string, rawPrice?: string): {
   dealBadge?: string;
   promoBadgeText?: string;
   isUnpricedPromo?: boolean;
+  bundleQuantity?: number;
+  bundleTotalPrice?: number;
 } {
   const nameL = rawName.toLowerCase();
+  const descL = (description || '').toLowerCase();
+  const combinedText = `${nameL} ${descL} ${rawPrice || ''}`;
+  
   let price = 0;
+  let bundleQuantity: number | undefined;
+  let bundleTotalPrice: number | undefined;
+  let dealType: DealType = 'sale';
+  let dealBadge: string | undefined;
 
-  if (rawPrice && rawPrice.trim()) {
-    price = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
-  }
-
-  // Try extracting price from title if not set
-  if (price === 0) {
-    const match = rawName.match(/\$([0-9]+\.[0-9]{2})/);
-    if (match) {
-      price = parseFloat(match[1]);
+  // 1. Check for Multi-Buys first across all text!
+  const multiMatch = combinedText.match(/(\d+)\s*(?:for|\/)\s*\$?(\d+(?:\.\d{2})?)/i);
+  
+  if (multiMatch) {
+    bundleQuantity = parseInt(multiMatch[1], 10);
+    bundleTotalPrice = parseFloat(multiMatch[2]);
+    if (bundleQuantity > 1 && bundleTotalPrice > 0) {
+      price = Number((bundleTotalPrice / bundleQuantity).toFixed(2));
+      dealType = 'multi_buy';
+    }
+  } else {
+    // Fallback to standard price parsing
+    if (rawPrice && rawPrice.trim()) {
+      price = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
     } else {
-      const multiMatch = rawName.match(/(\d+)\s*\/\s*\$([0-9]+(?:\.[0-9]{2})?)/);
-      if (multiMatch) {
-        const count = parseInt(multiMatch[1], 10);
-        const total = parseFloat(multiMatch[2]);
-        price = Number((total / count).toFixed(2));
+      const match = rawName.match(/\$([0-9]+\.[0-9]{2})/);
+      if (match) {
+        price = parseFloat(match[1]);
       }
     }
   }
 
-  // If price is still 0, mark as unpriced promo
   const isUnpriced = price === 0;
 
   let unitType: NormalizedUnitType = 'unit';
   let unitPrice = isUnpriced ? 'Varies in-store' : `$${price.toFixed(2)} each`;
   let unitDesc = isUnpriced ? 'Discount at register' : 'each';
-  let dealType: DealType = 'sale';
-  let dealBadge: string | undefined = undefined;
+
+  if (dealType === 'multi_buy' && bundleQuantity && bundleTotalPrice) {
+    unitDesc = `${bundleQuantity} for $${bundleTotalPrice.toFixed(2)} ($${price.toFixed(2)} ea)`;
+  }
 
   if (
     nameL.includes('/lb') ||
@@ -314,23 +327,27 @@ function parsePriceAndUnits(rawName: string, rawPrice?: string): {
   ) {
     unitType = 'lb';
     unitPrice = isUnpriced ? 'Varies in-store' : `$${price.toFixed(2)} / lb`;
-    unitDesc = 'per lb';
+    if (dealType !== 'multi_buy') unitDesc = 'per lb';
   } else if (nameL.includes('dozen') || nameL.includes('eggs') || nameL.includes('egg')) {
     unitType = 'dozen';
     unitPrice = isUnpriced ? 'Varies in-store' : `$${price.toFixed(2)} / dozen`;
-    unitDesc = 'per dozen';
+    if (dealType !== 'multi_buy') unitDesc = 'per dozen';
   } else if (nameL.includes('gallon') || nameL.includes('milk')) {
     unitType = 'gallon';
     unitPrice = isUnpriced ? 'Varies in-store' : `$${price.toFixed(2)} / gallon`;
-    unitDesc = 'per gallon';
-  } else if (nameL.includes('bogo') || nameL.includes('buy 1 get 1') || nameL.includes('buy one get one')) {
+    if (dealType !== 'multi_buy') unitDesc = 'per gallon';
+  } else if (nameL.includes('bogo') || nameL.includes('buy 1 get 1') || descL.includes('bogo') || descL.includes('buy 1 get 1')) {
     dealType = 'bogo';
     dealBadge = 'BOGO FREE';
-    unitPrice = isUnpriced ? 'Varies in-store' : `$${(price / 2).toFixed(2)} ea (BOGO Free)`;
+    if (!isUnpriced) {
+      price = Number((price / 2).toFixed(2));
+      unitPrice = `$${price.toFixed(2)} ea (BOGO Free)`;
+    } else {
+      unitPrice = 'Varies in-store';
+    }
     unitDesc = isUnpriced ? 'Discount at register' : 'effective per item';
   }
 
-  // Estimated regular shelf price
   const markup = dealType === 'bogo' ? 1.0 : (price > 10 ? 0.20 : 0.28);
   const originalPrice = isUnpriced ? 0 : Number((price * (1 + markup)).toFixed(2));
   const discountPercent = isUnpriced || originalPrice <= price
@@ -348,6 +365,8 @@ function parsePriceAndUnits(rawName: string, rawPrice?: string): {
     dealType,
     dealBadge,
     isUnpricedPromo: isUnpriced,
+    bundleQuantity,
+    bundleTotalPrice,
   };
 }
 
@@ -1080,7 +1099,7 @@ export async function fetchLiveDealsForStore(store: Store, zipCode: string): Pro
     if (!cleanTitle || seenTitles.has(cleanTitle.toLowerCase())) continue;
     seenTitles.add(cleanTitle.toLowerCase());
 
-    const priceInfo = parsePriceAndUnits(cleanTitle, raw.price);
+    const priceInfo = parsePriceAndUnits(cleanTitle, raw.price, raw.description);
     const category = inferCategory(cleanTitle, raw.brand);
     const genericProductGroup = inferGenericProductGroup(cleanTitle);
 
@@ -1103,6 +1122,8 @@ export async function fetchLiveDealsForStore(store: Store, zipCode: string): Pro
       unitDescription: priceInfo.unitDescription,
       dealType: priceInfo.dealType,
       dealBadge: priceInfo.dealBadge,
+      bundleQuantity: priceInfo.bundleQuantity,
+      bundleTotalPrice: priceInfo.bundleTotalPrice,
       validUntil,
       inStock: true,
       genericProductGroup,

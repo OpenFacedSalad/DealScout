@@ -7,9 +7,9 @@ import {
   Loader2,
   Check,
   Building2,
-  Navigation,
 } from 'lucide-react';
 import { UserLocation, RadiusOption } from '../types';
+import { useAutocomplete } from '../hooks/useAutocomplete';
 
 interface LocationModalProps {
   isOpen: boolean;
@@ -21,7 +21,7 @@ interface LocationModalProps {
   isGpsLocating: boolean;
 }
 
-const RADIUS_OPTIONS: RadiusOption[] = [1, 5, 10, 25];
+const RADIUS_OPTIONS: RadiusOption[] = [5, 10, 20, 50];
 
 const PRESET_LOCATIONS: Array<{
   name: string;
@@ -83,8 +83,31 @@ export default function LocationModal({
   const [selectedRadius, setSelectedRadius] = useState<RadiusOption>(currentRadius);
   const [isResolving, setIsResolving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const { suggestions, isSearching } = useAutocomplete(query);
 
   if (!isOpen) return null;
+
+  const handleSelectSuggestion = (s: any) => {
+    const lat = parseFloat(s.lat);
+    const lng = parseFloat(s.lon);
+    const addr = s.address || {};
+    const city = addr.city || addr.town || addr.village || addr.municipality || addr.hamlet || s.name || 'Nearby';
+    const state = addr.state || '';
+    const zipCode = addr.postcode || '';
+
+    const resolvedLocation: UserLocation = {
+      latitude: lat,
+      longitude: lng,
+      city,
+      state,
+      zipCode,
+      formattedAddress: s.display_name,
+      isGps: false,
+      radiusMiles: selectedRadius,
+    };
+
+    onSave(resolvedLocation, selectedRadius);
+  };
 
   const handleResolveSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -214,7 +237,7 @@ export default function LocationModal({
             </button>
           </div>
 
-          <div>
+          <div className="relative">
             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">
               Search by ZIP Code or City, State
             </label>
@@ -226,8 +249,13 @@ export default function LocationModal({
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="e.g. 17050, Mechanicsburg PA, Austin TX"
-                  className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
+                  className="w-full pl-9 pr-8 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
                 />
+                {isSearching && (
+                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
+                    <Loader2 className="w-3.5 h-3.5 text-emerald-600 animate-spin" />
+                  </div>
+                )}
               </div>
               <button
                 type="submit"
@@ -237,6 +265,26 @@ export default function LocationModal({
                 {isResolving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Set'}
               </button>
             </form>
+
+            {suggestions.length > 0 && (
+              <ul className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden max-h-56 overflow-y-auto">
+                {suggestions.map((s, idx) => (
+                  <li key={idx}>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectSuggestion(s)}
+                      className="w-full text-left px-3 py-2.5 hover:bg-emerald-50/70 flex items-start space-x-2.5 border-b border-slate-100 last:border-0 transition"
+                    >
+                      <MapPin className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
+                      <span className="text-xs text-slate-700 font-medium leading-snug">
+                        {s.display_name}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
             {errorMessage && (
               <p className="text-xs font-medium text-rose-600 mt-1.5">{errorMessage}</p>
             )}

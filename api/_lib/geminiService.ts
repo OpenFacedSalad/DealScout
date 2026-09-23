@@ -360,85 +360,78 @@ async function ocrVerifyDealTile(
 
   try {
     const controller = new AbortController();
-    // INCREASED TIMEOUT: 8 seconds to handle slow grocery image CDNs
     const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-    console.log(`[OCR] Fetching image for: ${deal.title}`);
     const res = await fetch(deal.imageUrl, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        Accept: 'image/*,*/*',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        Accept: 'image/webp,image/apng,image/*,*/*;q=0.8',
       },
     });
 
     clearTimeout(timeoutId);
-    if (!res.ok) {
-      console.warn(`[OCR] Image fetch failed for ${deal.title} - Status: ${res.status}`);
-      return null;
-    }
+    if (!res.ok) return { subtitle: `DEBUG Fetch: HTTP ${res.status}` };
 
     const arrayBuffer = await res.arrayBuffer();
-    const base64Data = Buffer.from(arrayBuffer).toString('base64');
-    const contentType = res.headers.get('content-type') || 'image/jpeg';
+    const buffer = Buffer.from(arrayBuffer);
+    const base64Data = buffer.toString('base64');
+    
+    let mimeType = 'image/jpeg';
+    if (buffer.length > 4) {
+      const hex = buffer.subarray(0, 4).toString('hex').toLowerCase();
+      if (hex.startsWith('89504e47')) mimeType = 'image/png';
+      else if (hex.startsWith('52494646')) mimeType = 'image/webp';
+    }
 
-    // Use active SDK models
-    const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
-    let response: any = null;
+    let responseText = '';
+    const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-flash-latest', 'gemini-3.8-flash'];
+    let lastError: any = null;
 
     for (const model of modelsToTry) {
       try {
-        response = await ai.models.generateContent({
+        const response = await ai.models.generateContent({
           model,
           contents: [
             {
-              inlineData: {
-                mimeType: contentType.startsWith('image/') ? contentType : 'image/jpeg',
-                data: base64Data,
-              },
+              inlineData: { mimeType, data: base64Data },
             },
             {
-              text: `Analyze this grocery store circular ad image tile with high-accuracy OCR:
-1. Examine all visual text, yellow/red badges, bursts, banners, and price stamps.
-2. Check for multi-buys (e.g., "2 for $10", "2 for $4", "3 for $5", "4 for $10", "10 for $10").
-   - If found:
-     bundleQuantity: the integer count (e.g., 2)
-     bundleTotalPrice: the total bundle cost (e.g., 10.00)
-     unitSalePrice: bundleTotalPrice / bundleQuantity (e.g., 5.00)
-3. Check for unpriced promotions (e.g., "BUY 1 GET 2 FREE", "BOGO FREE", "50% OFF") with no base dollar amount:
-   - isUnpricedPromo: true
-   - unitSalePrice: 0.00
-4. Transcribe all visible text verbatim into promoBadgeText.
-
-Respond ONLY with valid JSON matching this schema:
+              text: `Analyze this grocery store circular ad image tile.
+Look for multi-buy deals (e.g., "2 for $10", "3 for $4", "2/$5", "10/$10").
+If found, set bundleQuantity (integer) and bundleTotalPrice (number).
+Respond ONLY with raw JSON:
 {
-  "hasPromoBadge": boolean,
-  "promoBadgeText": string,
   "bundleQuantity": number,
   "bundleTotalPrice": number,
-  "unitSalePrice": number,
   "isUnpricedPromo": boolean
 }`,
             },
           ],
-          config: {
-            responseMimeType: 'application/json',
-          },
         });
-        if (response?.text) break;
-      } catch (modelErr: any) {
-        // Continue to next model tier
+        if (response?.text) {
+          responseText = response.text;
+          break;
+        }
+      } catch (apiErr: any) {
+        lastError = apiErr;
       }
     }
 
-    if (!response?.text) {
-      return null;
+    if (!responseText) {
+      if (lastError) return { subtitle: `DEBUG API: ${lastError.message?.substring(0, 40)}` };
+      return { subtitle: 'DEBUG: API Returned Empty Response' };
     }
 
-    const parsed = JSON.parse(response.text) as OCRVerifyResult;
+    const cleanedText = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    let parsed: any;
+    try {
+      parsed = JSON.parse(cleanedText);
+    } catch (parseErr: any) {
+      return { subtitle: `DEBUG JSON: ${cleanedText.substring(0, 30)}` };
+    }
 
-    // Handle Multi-Buy Verification
-    if (parsed.hasPromoBadge && parsed.bundleQuantity && parsed.bundleQuantity > 1 && parsed.bundleTotalPrice && parsed.bundleTotalPrice > 0) {
+    if (parsed.bundleQuantity && parsed.bundleQuantity > 1 && parsed.bundleTotalPrice && parsed.bundleTotalPrice > 0) {
       const singlePrice = Number((parsed.bundleTotalPrice / parsed.bundleQuantity).toFixed(2));
       return {
         bundleQuantity: parsed.bundleQuantity,
@@ -447,71 +440,70 @@ Respond ONLY with valid JSON matching this schema:
         unitPrice: `$${singlePrice.toFixed(2)} each`,
         normalizedUnitCost: singlePrice,
         normalizedUnitType: deal.normalizedUnitType || 'unit',
-        promoBadgeText: parsed.promoBadgeText || `${parsed.bundleQuantity} for $${parsed.bundleTotalPrice}`,
         unitDescription: `${parsed.bundleQuantity} for $${parsed.bundleTotalPrice.toFixed(2)} ($${singlePrice.toFixed(2)} ea)`,
         dealType: 'multi_buy',
         isUnpricedPromo: false,
+        subtitle: '',
       };
     }
 
-    // Handle Unpriced Promotion Verification
     if (parsed.isUnpricedPromo) {
       return {
         isUnpricedPromo: true,
         salePrice: 0,
         originalPrice: 0,
-        discountPercent: 0,
-        promoBadgeText: parsed.promoBadgeText || 'SPECIAL OFFER',
         dealType: 'bogo',
+        subtitle: '',
       };
     }
-  } catch (err) {
-    // OCR failed silently
-  }
 
-  return null;
+    return { subtitle: '' };
+  } catch (err: any) {
+    if (err.name === 'AbortError') return { subtitle: 'DEBUG: Fetch Timeout' };
+    return { subtitle: `DEBUG Fatal: ${err.message?.substring(0, 30)}` };
+  }
 }
 
-/**
- * Intelligent Heuristic Selector:
- * Evaluates aggregated deals and runs targeted Gemini Vision OCR
- * on items with suspected unparsed multi-buys or unpriced promo badges.
- */
 export async function enrichDealsWithOCR(
   ai: GoogleGenAI,
   deals: DealItem[]
 ): Promise<DealItem[]> {
-  const candidateDeals = deals.filter((deal) => {
-    if (!deal.imageUrl) return false;
-    // Skip if already parsed as multi-buy
-    if (deal.bundleQuantity && deal.bundleQuantity > 1 && deal.bundleTotalPrice) return false;
+  const candidateDeals: DealItem[] = [];
 
-    const titleLower = (deal.title || '').toLowerCase();
-    const badgeLower = (deal.dealBadge || deal.promoBadgeText || '').toLowerCase();
-    const text = `${titleLower} ${badgeLower}`;
-    
-    // Explicit bundle/bogo keywords in title/badge
-    const hasBundleClue = /\b(\d+\s*(?:for|\/)\s*\$?\d+|bogo|buy\s*\d+|free|\d+%\s*off)\b/i.test(text);
-    // Typical packaged grocery whole dollar multi-buys ($2, $3, $4, $5, $6, $10)
-    const isWholeDollarSnackOrPantry =
-      deal.salePrice >= 2 &&
-      deal.salePrice <= 10 &&
-      Math.floor(deal.salePrice) === deal.salePrice &&
-      ['pantry_snacks', 'beverages', 'frozen', 'dairy_eggs', 'produce'].includes(deal.category);
+  // Filter candidates first
+  for (const deal of deals) {
+    const isWholeDollar = deal.salePrice >= 2 && Math.floor(deal.salePrice) === deal.salePrice;
     const isUnpriced = !deal.salePrice || deal.salePrice === 0;
 
-    return hasBundleClue || isWholeDollarSnackOrPantry || isUnpriced;
-  });
+    if (deal.imageUrl && (isWholeDollar || isUnpriced)) {
+      candidateDeals.push(deal);
+    }
+  }
 
   if (candidateDeals.length === 0) return deals;
 
-  // Process candidate deals in controlled sequence (max 4) to avoid rate limits
-  const ocrResults: Array<{ id: string; update: Partial<DealItem> | null }> = [];
-  const targets = candidateDeals.slice(0, 4);
+  // NO QUOTA CAP: We process all candidates to intentionally expose 429 limits
+  const ocrResults: { id: string; update: Partial<DealItem> | null }[] = [];
+  
+  // Staggering in chunks of 5 just to prevent browser/network level socket hangups
+  const chunkSize = 5;
 
-  for (const deal of targets) {
-    const update = await ocrVerifyDealTile(ai, deal);
-    ocrResults.push({ id: deal.id, update });
+  for (let i = 0; i < candidateDeals.length; i += chunkSize) {
+    const chunk = candidateDeals.slice(i, i + chunkSize);
+    
+    const chunkResults = await Promise.all(
+      chunk.map(async (deal) => {
+        const update = await ocrVerifyDealTile(ai, deal);
+        return { id: deal.id, update };
+      })
+    );
+    
+    ocrResults.push(...chunkResults);
+
+    // Minor 1s delay so Vercel doesn't kill the TCP connections
+    if (i + chunkSize < candidateDeals.length) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
   }
 
   const updatesMap = new Map<string, Partial<DealItem>>(
@@ -903,6 +895,97 @@ Requirements for each extracted item:
     storeLogoBg: store.logoBg,
     storeLogoText: store.logoText,
   }));
+}
+
+/**
+ * Universal Vision Pipeline for non-Flipp store flyers (e.g. Trader Joe's, The Fresh Market, Piggly Wiggly).
+ * Downloads raw flyer promotional images and runs multimodal extraction with Gemini.
+ */
+export async function extractDealsFromFlyerImage(
+  store: Store,
+  imageUrl: string
+): Promise<DealItem[]> {
+  const ai = getAiClient();
+  if (!ai) {
+    console.warn('[Vision Pipeline] Gemini AI offline. Cannot parse flyer image.');
+    return [];
+  }
+
+  try {
+    // 1. Fetch the image and convert to base64
+    const imgRes = await fetch(imageUrl);
+    if (!imgRes.ok) throw new Error(`Failed to fetch flyer image: ${imgRes.status}`);
+    const arrayBuffer = await imgRes.arrayBuffer();
+    const base64Data = Buffer.from(arrayBuffer).toString('base64');
+    const mimeType = imgRes.headers.get('content-type') || 'image/jpeg';
+
+    // 2. Build the Vision Prompt
+    const prompt = `
+You are DealScout's Universal Vision Pipeline.
+Target Store: ${store.name} (${store.chain})
+Category Speciality: ${store.featuredCategory || 'Grocery'}
+
+Task: 
+Extract every grocery deal visible in this promotional flyer image.
+Reflect the store's real brand signatures.
+
+Rules:
+1. 'salePrice' MUST be the final sale price.
+2. Ensure 'normalizedUnitCost' is mathematically precise ($/lb, $/oz, $/gallon, $/unit, $/dozen).
+3. Check for multi-buys ("2 for $10") and calculate 'normalizedUnitCost' correctly.
+4. Assign a standard 'genericProductGroup' identifier (e.g., "ground_beef_80_20", "honeycrisp_apples") to match against competitors.
+5. Set 'inStock' to true.
+`;
+
+    // 3. Send Multimodal Request with model fallback
+    const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+    let response: any = null;
+
+    for (const model of modelsToTry) {
+      try {
+        response = await ai.models.generateContent({
+          model,
+          contents: [
+            prompt,
+            {
+              inlineData: {
+                data: base64Data,
+                mimeType: mimeType.startsWith('image/') ? mimeType : 'image/jpeg',
+              },
+            },
+          ],
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: dealsResponseSchema,
+            temperature: 0.1,
+          },
+        });
+        if (response?.text) break;
+      } catch {
+        // Try next model tier
+      }
+    }
+
+    if (!response?.text) {
+      return [];
+    }
+
+    const parsedDeals = parseJsonFromText<DealItem[]>(response.text, []);
+    const sanitized = sanitizeAndValidateDeals(parsedDeals);
+
+    // 4. Decorate deals with store IDs
+    return sanitized.map((deal, idx) => ({
+      ...deal,
+      id: `${store.id}-vision-${Date.now()}-${idx}`,
+      storeId: store.id,
+      storeName: store.name,
+      storeLogoBg: store.logoBg,
+      storeLogoText: store.logoText,
+    }));
+  } catch (err) {
+    console.error('[Vision Pipeline] AI Flyer Extraction Failed:', err);
+    return [];
+  }
 }
 
 export async function compareDealsWithAI(

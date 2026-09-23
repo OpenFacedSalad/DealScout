@@ -31,7 +31,7 @@ export type QualityTier =
   | 'premium'
   | 'organic';
 
-export type RadiusOption = 1 | 5 | 10 | 25;
+export type RadiusOption = 1 | 5 | 10 | 20 | 25 | 50 | number;
 
 export type ActiveTab = 'circulars' | 'compare' | 'list';
 

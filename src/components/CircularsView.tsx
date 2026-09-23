@@ -137,7 +137,7 @@ export default function CircularsView({
   }, [deals, selectedStoreId, selectedCategory, promoFilter, searchQuery, sortBy]);
 
   return (
-    <div className="space-y-6">
+    <div className="w-full h-full space-y-6">
       <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2 text-xs font-bold text-emerald-700 uppercase tracking-wider">
@@ -172,62 +172,65 @@ export default function CircularsView({
         </div>
       </div>
 
-      <div className="flex items-center space-x-2 overflow-x-auto overflow-y-hidden max-w-full pb-2 scrollbar-none">
-        <button
-          onClick={() => setSelectedStoreId('all')}
-          className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap transition shadow-2xs ${
-            selectedStoreId === 'all'
-              ? 'bg-slate-900 text-white'
-              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
-          }`}
-        >
-          <StoreIcon className="w-3.5 h-3.5" />
-          <span>All Stores</span>
-          <span
-            className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-              selectedStoreId === 'all' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'
-            }`}
-          >
-            {deals.length}
-          </span>
-        </button>
-
-        {stores.map((store, sIdx) => (
+      {/* STICKY STORE FILTER */}
+      <div className="sticky top-[108px] sm:top-[112px] z-30 bg-slate-50/95 backdrop-blur-md py-3 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 border-b border-slate-200 shadow-xs">
+        <div className="flex items-center space-x-2 overflow-x-auto scrollbar-none">
           <button
-            key={store.id ? `store-${store.id}` : `store-idx-${sIdx}`}
-            onClick={() => setSelectedStoreId(store.id)}
-            className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap transition shadow-2xs border ${
-              selectedStoreId === store.id
-                ? 'bg-slate-900 text-white border-slate-900'
-                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+            onClick={() => setSelectedStoreId('all')}
+            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition shadow-2xs shrink-0 ${
+              selectedStoreId === 'all'
+                ? 'bg-slate-900 text-white'
+                : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
             }`}
           >
+            <StoreIcon className="w-3.5 h-3.5" />
+            <span>All Stores</span>
             <span
-              className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider"
-              style={{
-                backgroundColor: store.logoBg,
-                color: store.logoText,
-              }}
+              className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                selectedStoreId === 'all' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'
+              }`}
             >
-              {store.logoText}
+              {deals.length}
             </span>
-            <span>{store.name}</span>
-            <span className="text-[11px] font-normal text-slate-400">
-              {store.distanceMiles}mi
-            </span>
-            {store.totalDealsCount > 0 && (
-              <span
-                className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-                  selectedStoreId === store.id
-                    ? 'bg-slate-800 text-white'
-                    : 'bg-slate-100 text-slate-600'
-                }`}
-              >
-                {store.totalDealsCount}
-              </span>
-            )}
           </button>
-        ))}
+
+          {stores.map((store, sIdx) => (
+            <button
+              key={store.id ? `store-${store.id}` : `store-idx-${sIdx}`}
+              onClick={() => setSelectedStoreId(store.id)}
+              className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition shadow-2xs border shrink-0 ${
+                selectedStoreId === store.id
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              <span
+                className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider"
+                style={{
+                  backgroundColor: store.logoBg,
+                  color: store.logoText,
+                }}
+              >
+                {store.logoText}
+              </span>
+              <span>{store.name}</span>
+              <span className="text-[11px] font-normal text-slate-400">
+                {store.distanceMiles}mi
+              </span>
+              {store.totalDealsCount > 0 && (
+                <span
+                  className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                    selectedStoreId === store.id
+                      ? 'bg-slate-800 text-white'
+                      : 'bg-slate-100 text-slate-600'
+                  }`}
+                >
+                  {store.totalDealsCount}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
       </div>
 
       {activeStore && (
@@ -402,7 +405,7 @@ export default function CircularsView({
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6 pb-20">
           {displayedDeals.map((deal, dIdx) => {
             const stats = groupStats[deal.genericProductGroup];
             const isLowestInGroup = stats ? deal.normalizedUnitCost <= stats.minUnitCost : false;

@@ -133,7 +133,7 @@ export default function Header({
               title="Change search location"
             >
               <MapPin className="w-3.5 h-3.5 text-emerald-600 group-hover:scale-110 transition-transform" />
-              <span className="font-semibold text-slate-900 truncate max-w-[130px] sm:max-w-[170px]">
+              <span className="font-semibold text-slate-900 truncate max-w-[110px] sm:max-w-[160px]">
                 {location.city || 'Select Area'}, {location.state}
               </span>
               {location.zipCode && (
@@ -142,6 +142,26 @@ export default function Header({
                 </span>
               )}
             </button>
+
+            {/* Radius Selector Dropdown */}
+            <div className="relative">
+              <select
+                value={radiusMiles}
+                onChange={(e) => setRadiusMiles(Number(e.target.value) as RadiusOption)}
+                className="appearance-none bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-lg pl-2.5 pr-6 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer transition hover:bg-emerald-100/70"
+                title="Search Radius"
+              >
+                <option value={5}>5 mi</option>
+                <option value={10}>10 mi</option>
+                <option value={20}>20 mi</option>
+                <option value={50}>50 mi</option>
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-1.5 text-emerald-600">
+                <svg className="fill-current h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                  <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+                </svg>
+              </div>
+            </div>
 
             <button
               onClick={onDetectGPS}
@@ -161,25 +181,6 @@ export default function Header({
                 />
               )}
             </button>
-
-            <div className="hidden md:flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs">
-              <span className="px-2 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                Radius:
-              </span>
-              {RADIUS_OPTIONS.map((r) => (
-                <button
-                  key={r}
-                  onClick={() => setRadiusMiles(r)}
-                  className={`px-2 py-1 rounded font-semibold text-[11px] transition ${
-                    radiusMiles === r
-                      ? 'bg-white text-emerald-700 shadow-xs border border-slate-200'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {r}mi
-                </button>
-              ))}
-            </div>
 
             {!isStandalone && (
               <button

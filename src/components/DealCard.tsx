@@ -60,7 +60,9 @@ export default function DealCard({
 
         {deal.validUntil && (
           <span className="text-[11px] text-slate-400">
-            {deal.validUntil.startsWith('202') ? `Ends ${deal.validUntil.slice(5)}` : deal.validUntil}
+            {typeof deal.validUntil === 'string' && deal.validUntil.startsWith('202')
+              ? `Ends ${deal.validUntil.slice(5)}`
+              : String(deal.validUntil)}
           </span>
         )}
       </div>

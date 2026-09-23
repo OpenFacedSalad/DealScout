@@ -126,40 +126,60 @@ export default function App() {
       setIsLoading(true);
       setFetchError(null);
 
-      try {
+      const payload = {
+        lat: targetLocation?.latitude ?? 40.2137,
+        lng: targetLocation?.longitude ?? -77.0075,
+        city: targetLocation?.city || 'Mechanicsburg',
+        state: targetLocation?.state || 'PA',
+        zipCode: targetLocation?.zipCode || '17050',
+        radiusMiles: targetRadius || 10,
+      };
+
+      const doFetch = async () => {
         const response = await fetch('/api/circulars/nearby', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            lat: targetLocation.latitude,
-            lng: targetLocation.longitude,
-            city: targetLocation.city,
-            state: targetLocation.state,
-            zipCode: targetLocation.zipCode,
-            radiusMiles: targetRadius,
-          }),
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(payload),
         });
 
         if (!response.ok) {
-          throw new Error(`Failed to fetch flyers (HTTP ${response.status})`);
+          throw new Error(`Server returned HTTP ${response.status}`);
+        }
+        return await response.json();
+      };
+
+      try {
+        let data;
+        try {
+          data = await doFetch();
+        } catch (firstErr) {
+          console.warn('[App] First circular fetch attempt failed, retrying once...', firstErr);
+          await new Promise((r) => setTimeout(r, 600));
+          data = await doFetch();
         }
 
-        const data = await response.json();
-        const newStores = data.stores || [];
-        const newDeals = data.deals || [];
-        
+        const newStores = Array.isArray(data?.stores) ? data.stores : [];
+        const newDeals = Array.isArray(data?.deals) ? data.deals : [];
+
         if (newStores.length > 0) {
           setStores(newStores);
-          safeStorage.setItem(STORAGE_KEY_STORES, JSON.stringify(newStores));
+          try {
+            safeStorage.setItem(STORAGE_KEY_STORES, JSON.stringify(newStores));
+          } catch {}
         }
         if (newDeals.length > 0) {
           const sanitized = sanitizeDealList(newDeals);
           setDeals(sanitized);
-          safeStorage.setItem(STORAGE_KEY_DEALS, JSON.stringify(sanitized));
+          try {
+            safeStorage.setItem(STORAGE_KEY_DEALS, JSON.stringify(sanitized));
+          } catch {}
         }
       } catch (err: any) {
         console.error('[App] Error loading circulars:', err);
-        setFetchError(err.message || 'Failed to load local grocery circulars.');
+        setFetchError(err?.message || 'Failed to load local grocery circulars.');
       } finally {
         setIsLoading(false);
       }
@@ -349,7 +369,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-slate-50 text-slate-900 flex flex-col antialiased">
+    <div className="min-h-screen w-full max-w-full bg-slate-50 text-slate-900 flex flex-col antialiased">
       <NotificationOptInBanner />
       <Header
         activeTab={activeTab}
