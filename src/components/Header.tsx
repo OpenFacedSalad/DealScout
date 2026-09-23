@@ -86,7 +86,7 @@ export default function Header({
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-xs">
+    <header className="w-full bg-white">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="py-3 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 sm:border-none">
           {/* Brand Identity */}

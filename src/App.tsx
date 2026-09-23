@@ -369,91 +369,97 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen w-full max-w-full bg-slate-50 text-slate-900 flex flex-col antialiased">
-      <NotificationOptInBanner />
-      <Header
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        location={location}
-        radiusMiles={radiusMiles}
-        setRadiusMiles={setRadiusMiles}
-        onOpenLocationModal={() => setIsLocationModalOpen(true)}
-        onOpenUploadModal={() => setIsUploadModalOpen(true)}
-        onDetectGPS={handleDetectGPS}
-        isGpsLocating={isGpsLocating}
-        comparisonCount={comparisonGroups.filter((g) => g.totalStores > 1).length}
-        shoppingListCount={shoppingList.length}
-        totalSavings={totalListSavings}
-        onOpenDocViewer={handleOpenDocModal}
-      />
+    <div className="h-screen w-full flex flex-col bg-slate-50 overflow-hidden antialiased">
+      {/* 2. STATIC HEADER (Takes up its natural height, does not scroll) */}
+      <div className="shrink-0 bg-white border-b border-slate-200 z-40">
+        <NotificationOptInBanner />
+        <Header
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          location={location}
+          radiusMiles={radiusMiles}
+          setRadiusMiles={setRadiusMiles}
+          onOpenLocationModal={() => setIsLocationModalOpen(true)}
+          onOpenUploadModal={() => setIsUploadModalOpen(true)}
+          onDetectGPS={handleDetectGPS}
+          isGpsLocating={isGpsLocating}
+          comparisonCount={comparisonGroups.filter((g) => g.totalStores > 1).length}
+          shoppingListCount={shoppingList.length}
+          totalSavings={totalListSavings}
+          onOpenDocViewer={handleOpenDocModal}
+        />
+      </div>
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {fetchError && (
-          <div className="mb-6 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 flex items-center justify-between">
-            <div>
-              <p className="font-semibold text-sm">Unable to load grocery circulars</p>
-              <p className="text-xs text-red-600 mt-0.5">{fetchError}</p>
+      {/* 3. SCROLLABLE CONTENT AREA */}
+      <main className="flex-1 overflow-y-auto overflow-x-hidden relative w-full pb-20">
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          {fetchError && (
+            <div className="mb-6 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 flex items-center justify-between">
+              <div>
+                <p className="font-semibold text-sm">Unable to load grocery circulars</p>
+                <p className="text-xs text-red-600 mt-0.5">{fetchError}</p>
+              </div>
+              <button
+                onClick={() => fetchCirculars(location, radiusMiles)}
+                className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg shadow-sm transition"
+              >
+                Retry Search
+              </button>
             </div>
-            <button
-              onClick={() => fetchCirculars(location, radiusMiles)}
-              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg shadow-sm transition"
-            >
-              Retry Search
-            </button>
-          </div>
-        )}
+          )}
 
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-24 space-y-4">
-            <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
-            <div className="text-center">
-              <p className="text-sm font-semibold text-slate-800">
-                Searching live weekly circular flyers near {location.city}...
-              </p>
-              <p className="text-xs text-slate-500 mt-1">
-                Gemini 3.7 Flash Grounding live web ad prices & normalizing package unit costs
-              </p>
+          {isLoading ? (
+            <div className="flex flex-col items-center justify-center py-24 space-y-4">
+              <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+              <div className="text-center">
+                <p className="text-sm font-semibold text-slate-800">
+                  Searching live weekly circular flyers near {location.city}...
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Gemini 3.7 Flash Grounding live web ad prices & normalizing package unit costs
+                </p>
+              </div>
             </div>
-          </div>
-        ) : (
-          <>
-            {activeTab === 'circulars' && (
-              <CircularsView
-                stores={stores}
-                deals={deals}
-                location={location}
-                radiusMiles={radiusMiles}
-                shoppingList={rawShoppingList}
-                onToggleList={handleToggleDealInList}
-                onOpenComparison={(groupKey) => {
-                  const grp = comparisonGroups.find((g) => g.genericProductGroup === groupKey);
-                  if (grp) setSelectedComparisonGroup(grp);
-                }}
-              />
-            )}
+          ) : (
+            <>
+              {activeTab === 'circulars' && (
+                <CircularsView
+                  stores={stores}
+                  deals={deals}
+                  location={location}
+                  radiusMiles={radiusMiles}
+                  shoppingList={rawShoppingList}
+                  onToggleList={handleToggleDealInList}
+                  onOpenComparison={(groupKey) => {
+                    const grp = comparisonGroups.find((g) => g.genericProductGroup === groupKey);
+                    if (grp) setSelectedComparisonGroup(grp);
+                  }}
+                />
+              )}
 
-            {activeTab === 'compare' && (
-              <DealComparisonView
-                groups={comparisonGroups}
-                stores={stores}
-                shoppingList={rawShoppingList}
-                onToggleList={handleToggleDealInList}
-                onOpenDetailModal={(group) => setSelectedComparisonGroup(group)}
-              />
-            )}
+              {activeTab === 'compare' && (
+                <DealComparisonView
+                  groups={comparisonGroups}
+                  stores={stores}
+                  shoppingList={rawShoppingList}
+                  onToggleList={handleToggleDealInList}
+                  onOpenDetailModal={(group) => setSelectedComparisonGroup(group)}
+                />
+              )}
 
-            {activeTab === 'list' && (
-              <ShoppingListView
-                items={shoppingList}
-                onRemoveItem={handleRemoveListItem}
-                onToggleChecked={handleToggleListItemChecked}
-                onUpdateQuantity={handleUpdateListItemQuantity}
-                onAddCustomItem={handleAddCustomItem}
-                onSwapDeal={handleSwapItemWithAlternative}
-              />
-            )}
-          </>
-        )}
+              {activeTab === 'list' && (
+                <ShoppingListView
+                  items={shoppingList}
+                  onRemoveItem={handleRemoveListItem}
+                  onToggleChecked={handleToggleListItemChecked}
+                  onUpdateQuantity={handleUpdateListItemQuantity}
+                  onAddCustomItem={handleAddCustomItem}
+                  onSwapDeal={handleSwapItemWithAlternative}
+                />
+              )}
+            </>
+          )}
+        </div>
       </main>
 
       <InstallBanner />

@@ -173,8 +173,8 @@ export default function CircularsView({
       </div>
 
       {/* STICKY STORE FILTER */}
-      <div className="sticky top-[108px] sm:top-[112px] z-30 bg-slate-50/95 backdrop-blur-md py-3 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 border-b border-slate-200 shadow-xs">
-        <div className="flex items-center space-x-2 overflow-x-auto scrollbar-none">
+      <div className="sticky top-0 z-30 bg-slate-50/95 backdrop-blur-md py-3 border-b border-slate-200 shadow-sm w-full">
+        <div className="flex items-center space-x-2 overflow-x-auto scrollbar-none w-full px-1">
           <button
             onClick={() => setSelectedStoreId('all')}
             className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition shadow-2xs shrink-0 ${
