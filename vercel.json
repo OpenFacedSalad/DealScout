@@ -33,6 +33,7 @@
     }
   ],
   "rewrites": [
+    { "source": "/api/circulars/nearby", "destination": "/api/circulars/nearby" },
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]

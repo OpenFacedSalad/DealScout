@@ -1,165 +1,204 @@
-import express, { Request, Response } from 'express';
+export const runtime = 'edge';
+
 import { geocodeQuery, reverseGeocodeCoords, getRegionalDefaultStores } from './_lib/storeFinder.js';
 import { getCircularsForLocation, compareDealsWithAI, parseFlyerWithAI } from './_lib/geminiService.js';
 import { getFullKarnsCircularDeals } from './_lib/karnsScraper.js';
 import { DealItem } from '../src/types.js';
 
-const app = express();
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Origin, X-Requested-With, Content-Type, Accept, Authorization',
+  'Content-Type': 'application/json',
+};
 
-app.use(express.json({ limit: '25mb' }));
-app.use(express.urlencoded({ limit: '25mb', extended: true }));
-
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  // If Vercel rewrote /api/(.*) to /api, restore the requested subpath from Vercel headers
-  const matchedPath = (req.headers['x-matched-path'] as string) || (req.headers['x-rewrite-url'] as string);
-  if (matchedPath && (req.url === '/api' || req.url === '/' || req.url === '')) {
-    req.url = matchedPath;
-  }
-  next();
-});
-
-const router = express.Router();
-
-router.get('/health', (_req: Request, res: Response) => {
-  res.json({
-    status: 'ok',
-    service: 'DealScout Vercel Gateway (Search Grounding & Multimodal OCR)',
-    version: '2.3.0',
-    pwa: true,
-    timestamp: new Date().toISOString(),
+function jsonResponse(data: any, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: corsHeaders,
   });
-});
+}
 
-router.post('/location/resolve', async (req: Request, res: Response) => {
-  try {
-    const { lat, lng, query } = req.body;
+function errorResponse(message: string, status = 500, details?: any): Response {
+  return new Response(JSON.stringify({ error: message, ...(details ? { details } : {}) }), {
+    status,
+    headers: corsHeaders,
+  });
+}
 
-    if (query && typeof query === 'string' && query.trim().length > 0) {
-      const resolved = await geocodeQuery(query.trim());
-      return res.json({ ...resolved, isGps: false });
-    }
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: corsHeaders });
+}
 
-    if (lat !== undefined && lng !== undefined && !isNaN(Number(lat)) && !isNaN(Number(lng))) {
-      const resolved = await reverseGeocodeCoords(Number(lat), Number(lng));
-      return res.json({
-        latitude: Number(lat),
-        longitude: Number(lng),
-        ...resolved,
-        isGps: true,
-      });
-    }
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const pathname = url.pathname;
 
-    return res.status(400).json({ error: 'Valid query string or numeric lat/lng required.' });
-  } catch (err: any) {
-    console.error('[API location/resolve] Error:', err);
-    return res.status(200).json({
-      latitude: 40.2137,
-      longitude: -77.0075,
-      city: 'Mechanicsburg',
-      state: 'PA',
-      zipCode: '17050',
-      formattedAddress: 'Mechanicsburg, PA 17050',
-      isGps: false,
+  if (pathname.endsWith('/health') || pathname === '/api' || pathname === '/') {
+    return jsonResponse({
+      status: 'ok',
+      service: 'DealScout Vercel Edge Gateway (Search Grounding & Multimodal OCR)',
+      runtime: 'edge',
+      version: '2.4.0',
+      pwa: true,
+      timestamp: new Date().toISOString(),
     });
   }
-});
 
-router.post('/circulars/nearby', async (req: Request, res: Response) => {
+  return jsonResponse({ status: 'ok', runtime: 'edge' });
+}
+
+export async function POST(req: Request) {
+  const url = new URL(req.url);
+  const matchedPath = req.headers.get('x-matched-path') || req.headers.get('x-rewrite-url');
+  const pathname = matchedPath || url.pathname;
+
+  let body: any = {};
   try {
-    const { lat, lng, city, state, zipCode, radiusMiles } = req.body || {};
+    body = await req.json();
+  } catch {
+    body = {};
+  }
 
-    const targetLat = lat !== undefined && !isNaN(Number(lat)) ? Number(lat) : 40.2137;
-    const targetLng = lng !== undefined && !isNaN(Number(lng)) ? Number(lng) : -77.0075;
-    const targetCity = city || 'Mechanicsburg';
-    const targetState = state || 'PA';
-    const targetZip = zipCode || '17050';
-    const targetRadius = Number(radiusMiles) > 0 ? Number(radiusMiles) : 10;
-
-    let data;
+  // Route: /api/location/resolve
+  if (pathname.includes('/location/resolve')) {
     try {
-      data = await getCircularsForLocation(
-        targetLat,
-        targetLng,
-        targetCity,
-        targetState,
-        targetZip,
-        targetRadius
+      const { lat, lng, query } = body;
+
+      if (query && typeof query === 'string' && query.trim().length > 0) {
+        const resolved = await geocodeQuery(query.trim());
+        return jsonResponse({ ...resolved, isGps: false });
+      }
+
+      if (lat !== undefined && lng !== undefined && !isNaN(Number(lat)) && !isNaN(Number(lng))) {
+        const resolved = await reverseGeocodeCoords(Number(lat), Number(lng));
+        return jsonResponse({
+          latitude: Number(lat),
+          longitude: Number(lng),
+          ...resolved,
+          isGps: true,
+        });
+      }
+
+      return errorResponse('Valid query string or numeric lat/lng required.', 400);
+    } catch (err: any) {
+      console.error('[Edge API location/resolve] Error:', err);
+      return jsonResponse({
+        latitude: 40.2137,
+        longitude: -77.0075,
+        city: 'Mechanicsburg',
+        state: 'PA',
+        zipCode: '17050',
+        formattedAddress: 'Mechanicsburg, PA 17050',
+        isGps: false,
+      });
+    }
+  }
+
+  // Route: /api/circulars/nearby
+  if (pathname.includes('/circulars/nearby')) {
+    try {
+      const { lat, lng, city, state, zipCode, radiusMiles } = body || {};
+
+      const targetLat = lat !== undefined && !isNaN(Number(lat)) ? Number(lat) : 40.2137;
+      const targetLng = lng !== undefined && !isNaN(Number(lng)) ? Number(lng) : -77.0075;
+      const targetCity = city || 'Mechanicsburg';
+      const targetState = state || 'PA';
+      const targetZip = zipCode || '17050';
+      const targetRadius = Number(radiusMiles) > 0 ? Number(radiusMiles) : 10;
+
+      let data;
+      try {
+        data = await getCircularsForLocation(
+          targetLat,
+          targetLng,
+          targetCity,
+          targetState,
+          targetZip,
+          targetRadius
+        );
+      } catch (innerErr: any) {
+        console.warn('[Edge API circulars/nearby] Live retrieval failed, using fallback:', innerErr);
+        const stores = getRegionalDefaultStores(targetCity, targetState, targetLat, targetLng, targetRadius);
+        const karns = stores.find((s) => s.name.toLowerCase().includes('karns'));
+        let deals: DealItem[] = [];
+        if (karns) {
+          deals = await getFullKarnsCircularDeals(karns);
+        }
+        data = { stores, deals };
+      }
+
+      return jsonResponse(data);
+    } catch (err: any) {
+      console.error('[Edge API /circulars/nearby Error]:', err);
+      return errorResponse(err?.message || 'Failed to fetch circulars', 500);
+    }
+  }
+
+  // Route: /api/circulars/parse-flyer
+  if (pathname.includes('/circulars/parse-flyer')) {
+    try {
+      const { fileBase64, mimeType, storeId, storeName, logoBg, logoText } = body;
+
+      if (!fileBase64 || !mimeType) {
+        return errorResponse('fileBase64 and valid mimeType are required.', 400);
+      }
+
+      const cleanBase64 = fileBase64.replace(/^data:.*?;base64,/, '');
+
+      const parsedDeals = await parseFlyerWithAI(
+        cleanBase64,
+        mimeType,
+        {
+          id: storeId || 'custom-store',
+          name: storeName || 'Local Grocer',
+          logoBg: logoBg || '#059669',
+          logoText: logoText || 'FLYER',
+        }
       );
-    } catch (innerErr: any) {
-      console.warn('[API circulars/nearby] Live retrieval failed, using fallback:', innerErr);
-      const stores = getRegionalDefaultStores(targetCity, targetState, targetLat, targetLng, targetRadius);
-      const karns = stores.find((s) => s.name.toLowerCase().includes('karns'));
-      let deals: DealItem[] = [];
-      if (karns) {
-        deals = await getFullKarnsCircularDeals(karns);
+
+      return jsonResponse({ deals: parsedDeals, count: parsedDeals.length });
+    } catch (err: any) {
+      console.error('[Edge API parse-flyer] Error:', err);
+      return errorResponse(err?.message || 'Failed to parse flyer.', 500);
+    }
+  }
+
+  // Route: /api/compare/deals
+  if (pathname.includes('/compare/deals')) {
+    try {
+      const { productGroupName, deals } = body;
+      if (!productGroupName || !Array.isArray(deals) || deals.length === 0) {
+        return errorResponse('Valid productGroupName and non-empty deals array required.', 400);
       }
-      data = { stores, deals };
+
+      const comparison = await compareDealsWithAI(productGroupName, deals);
+      return jsonResponse(comparison);
+    } catch (err: any) {
+      console.error('[Edge API compare/deals] Error:', err);
+      return errorResponse(err?.message || 'Comparison failed', 500);
     }
-
-    return res.json(data);
-  } catch (err: any) {
-    console.error('[API /circulars/nearby Error Stack]:', err);
-    return res.status(500).json({ error: err.message || 'Failed to fetch circulars', stack: err.stack });
   }
-});
 
-router.post('/circulars/parse-flyer', async (req: Request, res: Response) => {
-  try {
-    const { fileBase64, mimeType, storeId, storeName, logoBg, logoText } = req.body;
-
-    if (!fileBase64 || !mimeType) {
-      return res.status(400).json({ error: 'fileBase64 and valid mimeType are required.' });
-    }
-
-    const cleanBase64 = fileBase64.replace(/^data:.*?;base64,/, '');
-
-    const parsedDeals = await parseFlyerWithAI(
-      cleanBase64,
-      mimeType,
-      {
-        id: storeId || 'custom-store',
-        name: storeName || 'Local Grocer',
-        logoBg: logoBg || '#059669',
-        logoText: logoText || 'FLYER',
-      }
-    );
-
-    return res.json({ deals: parsedDeals, count: parsedDeals.length });
-  } catch (err: any) {
-    console.error('[API parse-flyer] Error:', err);
-    return res.status(500).json({ error: err.message || 'Failed to parse flyer.' });
+  // Route: /api/cart/sync
+  if (pathname.includes('/cart/sync')) {
+    const { action, payload, timestamp } = body;
+    console.log(`[Edge Sync] Replaying ${action} mutation:`, payload, timestamp);
+    return jsonResponse({ status: 'applied', action });
   }
-});
 
-router.post('/compare/deals', async (req: Request, res: Response) => {
-  try {
-    const { productGroupName, deals } = req.body;
-    if (!productGroupName || !Array.isArray(deals) || deals.length === 0) {
-      return res.status(400).json({ error: 'Valid productGroupName and non-empty deals array required.' });
-    }
+  return errorResponse(`Route not found: ${pathname}`, 404);
+}
 
-    const comparison = await compareDealsWithAI(productGroupName, deals);
-    return res.json(comparison);
-  } catch (err: any) {
-    console.error('[API compare/deals] Error:', err);
-    return res.status(500).json({ error: err.message || 'Comparison failed' });
+export default async function handler(req: Request) {
+  if (req.method === 'OPTIONS') {
+    return OPTIONS();
   }
-});
-
-router.post('/cart/sync', (req: Request, res: Response) => {
-  const { action, payload, timestamp } = req.body;
-  console.log(`[Vercel Sync] Replaying ${action} mutation:`, payload, timestamp);
-  return res.json({ status: 'applied', action });
-});
-
-// Mount on both /api and / to ensure Vercel rewrites match regardless of path prefix
-app.use('/api', router);
-app.use('/', router);
-
-export default app;
+  if (req.method === 'GET') {
+    return GET(req);
+  }
+  if (req.method === 'POST') {
+    return POST(req);
+  }
+  return errorResponse(`Method ${req.method} not allowed`, 405);
+}
