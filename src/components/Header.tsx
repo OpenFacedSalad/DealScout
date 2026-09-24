@@ -92,14 +92,18 @@ export default function Header({
         <div className="py-3 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 sm:border-none">
           {/* Brand Identity */}
           <div className="flex items-center">
-            <Logo className="w-9 h-9 mr-2 drop-shadow-sm" />
+            <img
+              src="/dealscout-logo.png"
+              alt="DealScout Logo"
+              className="w-9 h-9 mr-2 object-contain drop-shadow-sm"
+            />
             <div>
               <div className="flex items-center space-x-2">
                 <span className="text-xl font-black tracking-tight text-slate-900 font-sans">
                   Deal<span className="text-emerald-600">Scout</span>
                 </span>
                 <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  v2.7
+                  v2.8
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 hidden sm:block">

@@ -39,7 +39,7 @@ export async function GET(req: Request) {
       status: 'ok',
       service: 'DealScout Vercel Edge Gateway (Search Grounding & Multimodal OCR)',
       runtime: 'edge',
-      version: '2.6.0',
+      version: '2.8.0',
       pwa: true,
       timestamp: new Date().toISOString(),
     });

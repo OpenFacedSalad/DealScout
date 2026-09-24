@@ -89,7 +89,7 @@ export default function App() {
   });
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isGpsLocating, setIsGpsLocating] = useState<boolean>(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const [isLocationModalOpen, setIsLocationModalOpen] = useState<boolean>(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
@@ -125,7 +125,7 @@ export default function App() {
   const fetchCirculars = useCallback(
     async (targetLocation: UserLocation, targetRadius: number) => {
       setIsLoading(true);
-      setFetchError(null);
+      setError(null);
 
       const payload = {
         lat: targetLocation?.latitude ?? 40.2137,
@@ -147,7 +147,12 @@ export default function App() {
         });
 
         if (!response.ok) {
-          throw new Error(`Server returned HTTP ${response.status}`);
+          let errMsg = `Server returned HTTP ${response.status}`;
+          try {
+            const errData = await response.json();
+            if (errData?.error) errMsg = errData.error;
+          } catch {}
+          throw new Error(errMsg);
         }
         return await response.json();
       };
@@ -179,8 +184,8 @@ export default function App() {
           } catch {}
         }
       } catch (err: any) {
-        console.error('[App] Error loading circulars:', err);
-        setFetchError(err?.message || 'Failed to load local grocery circulars.');
+        console.error("Fetch error:", err);
+        setError(err?.message || "Failed to load live circulars. The AI endpoint may be timing out.");
       } finally {
         setIsLoading(false);
       }
@@ -394,15 +399,13 @@ export default function App() {
       {/* 3. SCROLLABLE CONTENT AREA */}
       <main className="flex-1 overflow-y-auto overflow-x-hidden relative w-full pb-20">
         <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          {fetchError && (
-            <div className="mb-6 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 flex items-center justify-between">
-              <div>
-                <p className="font-semibold text-sm">Unable to load grocery circulars</p>
-                <p className="text-xs text-red-600 mt-0.5">{fetchError}</p>
-              </div>
+          {error && !isLoading && (
+            <div className="mx-4 my-8 p-6 bg-rose-50 border border-rose-200 rounded-xl text-center shadow-sm">
+              <h3 className="text-rose-800 font-bold mb-2">Live Search Failed</h3>
+              <p className="text-sm text-rose-600 mb-4">{error}</p>
               <button
-                onClick={() => fetchCirculars(location, radiusMiles)}
-                className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg shadow-sm transition"
+                onClick={() => window.location.reload()} 
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold rounded-lg transition"
               >
                 Retry Search
               </button>
