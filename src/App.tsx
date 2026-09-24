@@ -22,6 +22,7 @@ import DocViewerModal from './components/DocViewerModal';
 import InstallBanner from './components/InstallBanner';
 import FlyerUploadModal from './components/FlyerUploadModal';
 import NotificationOptInBanner from './components/NotificationOptInBanner';
+import CircularLoadingProgress from './components/CircularLoadingProgress';
 
 const STORAGE_KEY_LOCATION = 'grocery_circulars_location_v2';
 const STORAGE_KEY_RADIUS = 'grocery_circulars_radius_v2';
@@ -409,17 +410,7 @@ export default function App() {
           )}
 
           {isLoading ? (
-            <div className="flex flex-col items-center justify-center py-24 space-y-4">
-              <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
-              <div className="text-center">
-                <p className="text-sm font-semibold text-slate-800">
-                  Searching live weekly circular flyers near {location.city}...
-                </p>
-                <p className="text-xs text-slate-500 mt-1">
-                  Gemini 3.7 Flash Grounding live web ad prices & normalizing package unit costs
-                </p>
-              </div>
-            </div>
+            <CircularLoadingProgress isLoading={isLoading} />
           ) : (
             <>
               {activeTab === 'circulars' && (

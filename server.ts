@@ -92,38 +92,19 @@ async function startServer() {
       const targetState = state || 'PA';
       const targetZip = zipCode || '17050';
 
-      let data;
-      try {
-        data = await getCircularsForLocation(
-          targetLat,
-          targetLng,
-          targetCity,
-          targetState,
-          targetZip,
-          radius
-        );
-      } catch (innerErr: any) {
-        console.warn('[API /circulars/nearby] Live retrieval failed, using regional fallback:', innerErr);
-        const stores = getRegionalDefaultStores(targetCity, targetState, targetLat, targetLng, radius);
-        const karns = stores.find((s) => s.name.toLowerCase().includes('karns'));
-        let deals: DealItem[] = [];
-        if (karns) {
-          deals = await getFullKarnsCircularDeals(karns);
-        }
-        data = { stores, deals };
-      }
+      const data = await getCircularsForLocation(
+        targetLat,
+        targetLng,
+        targetCity,
+        targetState,
+        targetZip,
+        radius
+      );
 
       return res.json(data);
     } catch (error: any) {
       console.error('[API /circulars/nearby] Critical error:', error);
-      try {
-        const fallbackStores = getRegionalDefaultStores('Mechanicsburg', 'PA', 40.2137, -77.0075, 10);
-        const karns = fallbackStores.find((s) => s.name.toLowerCase().includes('karns'));
-        const deals = karns ? await getFullKarnsCircularDeals(karns) : [];
-        return res.status(200).json({ stores: fallbackStores, deals });
-      } catch {
-        return res.status(200).json({ stores: [], deals: [] });
-      }
+      return res.status(500).json({ error: error?.message || 'Failed to fetch circulars' });
     }
   });
 

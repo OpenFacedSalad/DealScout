@@ -39,7 +39,7 @@ export async function GET(req: Request) {
       status: 'ok',
       service: 'DealScout Vercel Edge Gateway (Search Grounding & Multimodal OCR)',
       runtime: 'edge',
-      version: '2.4.0',
+      version: '2.6.0',
       pwa: true,
       timestamp: new Date().toISOString(),
     });
@@ -107,26 +107,14 @@ export async function POST(req: Request) {
       const targetZip = zipCode || '17050';
       const targetRadius = Number(radiusMiles) > 0 ? Number(radiusMiles) : 10;
 
-      let data;
-      try {
-        data = await getCircularsForLocation(
-          targetLat,
-          targetLng,
-          targetCity,
-          targetState,
-          targetZip,
-          targetRadius
-        );
-      } catch (innerErr: any) {
-        console.warn('[Edge API circulars/nearby] Live retrieval failed, using fallback:', innerErr);
-        const stores = getRegionalDefaultStores(targetCity, targetState, targetLat, targetLng, targetRadius);
-        const karns = stores.find((s) => s.name.toLowerCase().includes('karns'));
-        let deals: DealItem[] = [];
-        if (karns) {
-          deals = await getFullKarnsCircularDeals(karns);
-        }
-        data = { stores, deals };
-      }
+      const data = await getCircularsForLocation(
+        targetLat,
+        targetLng,
+        targetCity,
+        targetState,
+        targetZip,
+        targetRadius
+      );
 
       return jsonResponse(data);
     } catch (err: any) {

@@ -99,7 +99,7 @@ export default function Header({
                   Deal<span className="text-emerald-600">Scout</span>
                 </span>
                 <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  v2.2
+                  v2.7
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 hidden sm:block">

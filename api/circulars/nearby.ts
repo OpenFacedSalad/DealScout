@@ -1,9 +1,6 @@
 export const runtime = 'edge';
 
 import { getCircularsForLocation } from '../_lib/geminiService.js';
-import { getRegionalDefaultStores } from '../_lib/storeFinder.js';
-import { getFullKarnsCircularDeals } from '../_lib/karnsScraper.js';
-import { DealItem } from '../../src/types.js';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -28,26 +25,14 @@ export async function POST(req: Request) {
     const targetZip = zipCode || '17050';
     const targetRadius = Number(radiusMiles) > 0 ? Number(radiusMiles) : 10;
 
-    let data;
-    try {
-      data = await getCircularsForLocation(
-        targetLat,
-        targetLng,
-        targetCity,
-        targetState,
-        targetZip,
-        targetRadius
-      );
-    } catch (innerErr: any) {
-      console.warn('[Edge API circulars/nearby] Live retrieval failed, using fallback stores:', innerErr);
-      const stores = getRegionalDefaultStores(targetCity, targetState, targetLat, targetLng, targetRadius);
-      const karns = stores.find((s) => s.name.toLowerCase().includes('karns'));
-      let deals: DealItem[] = [];
-      if (karns) {
-        deals = await getFullKarnsCircularDeals(karns);
-      }
-      data = { stores, deals };
-    }
+    const data = await getCircularsForLocation(
+      targetLat,
+      targetLng,
+      targetCity,
+      targetState,
+      targetZip,
+      targetRadius
+    );
 
     return new Response(JSON.stringify(data), {
       status: 200,
@@ -66,3 +51,4 @@ export async function POST(req: Request) {
 }
 
 export default POST;
+
