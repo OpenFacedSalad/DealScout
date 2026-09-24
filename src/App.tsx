@@ -127,6 +127,11 @@ export default function App() {
       setIsLoading(true);
       setError(null);
 
+      // 1. Create an AbortController to force a timeout on the frontend
+      const controller = new AbortController();
+      // INCREASED TO 60 SECONDS to allow Gemini Vision OCR sufficient time to process
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
+
       const payload = {
         lat: targetLocation?.latitude ?? 40.2137,
         lng: targetLocation?.longitude ?? -77.0075,
@@ -144,6 +149,7 @@ export default function App() {
             Accept: 'application/json',
           },
           body: JSON.stringify(payload),
+          signal: controller.signal,
         });
 
         if (!response.ok) {
@@ -161,7 +167,10 @@ export default function App() {
         let data;
         try {
           data = await doFetch();
-        } catch (firstErr) {
+        } catch (firstErr: any) {
+          if (controller.signal.aborted || firstErr?.name === 'AbortError') {
+            throw firstErr;
+          }
           console.warn('[App] First circular fetch attempt failed, retrying once...', firstErr);
           await new Promise((r) => setTimeout(r, 600));
           data = await doFetch();
@@ -185,8 +194,13 @@ export default function App() {
         }
       } catch (err: any) {
         console.error("Fetch error:", err);
-        setError(err?.message || "Failed to load live circulars. The AI endpoint may be timing out.");
+        if (err.name === 'AbortError' || err.message?.includes('AbortError') || err.message?.includes('Timeout')) {
+          setError("Request timed out. The AI processing took longer than 60 seconds.");
+        } else {
+          setError(err?.message || "Failed to load live circulars. The AI endpoint may be timing out.");
+        }
       } finally {
+        clearTimeout(timeoutId);
         setIsLoading(false);
       }
     },

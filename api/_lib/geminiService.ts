@@ -670,7 +670,7 @@ Return ONLY a valid JSON array of deal objects matching DealItem schema.
       for (let i = 0; i < modelsToTry.length; i++) {
         try {
           const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('AbortError: Timeout after 8s')), 8000)
+            setTimeout(() => reject(new Error('AbortError: Timeout after 50s')), 50000)
           );
           const result = (await Promise.race([
             ai.models.generateContent({
