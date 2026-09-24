@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
+import sharp from 'sharp';
 import { Store, DealItem } from '../../src/types.js';
 import { findPhysicalGroceryStoresOSM, getRegionalDefaultStores } from './storeFinder.js';
 import { getFullKarnsCircularDeals } from './karnsScraper.js';
@@ -16,7 +17,14 @@ export function getAiClient(): GoogleGenAI | null {
   }
 
   if (!aiClient) {
-    aiClient = new GoogleGenAI({ apiKey });
+    aiClient = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
   }
   return aiClient;
 }
@@ -349,14 +357,14 @@ interface OCRVerifyResult {
 }
 
 /**
- * Downloads image bytes for a circular tile and sends them to Gemini Vision
- * to inspect graphic bursts, badges, and multi-buy pricing.
+ * Downloads image bytes for a circular tile, compresses with sharp, and sends them to Gemini Vision
+ * to inspect graphic bursts, badges, and multi-buy pricing with a 10s fuse.
  */
 async function ocrVerifyDealTile(
   ai: GoogleGenAI,
   deal: DealItem
-): Promise<Partial<DealItem> | null> {
-  if (!deal.imageUrl) return null;
+): Promise<{ update: Partial<DealItem> | null; quotaExhausted?: boolean }> {
+  if (!deal.imageUrl) return { update: null };
 
   try {
     const controller = new AbortController();
@@ -371,96 +379,150 @@ async function ocrVerifyDealTile(
     });
 
     clearTimeout(timeoutId);
-    if (!res.ok) return { subtitle: `DEBUG Fetch: HTTP ${res.status}` };
+    if (!res.ok) return { update: null };
 
     const arrayBuffer = await res.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const base64Data = buffer.toString('base64');
     
-    let mimeType = 'image/jpeg';
-    if (buffer.length > 4) {
-      const hex = buffer.subarray(0, 4).toString('hex').toLowerCase();
-      if (hex.startsWith('89504e47')) mimeType = 'image/png';
-      else if (hex.startsWith('52494646')) mimeType = 'image/webp';
-    }
+    // Compress and resize image to a max of 600px to prevent Gemini payload bloat
+    const resizedBuffer = await sharp(Buffer.from(arrayBuffer))
+      .resize({ width: 600, height: 600, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 75 })
+      .toBuffer();
+      
+    const base64Data = resizedBuffer.toString('base64');
+    const optimizedContentType = 'image/jpeg';
 
-    let responseText = '';
-    const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-flash-latest', 'gemini-3.8-flash'];
-    let lastError: any = null;
+    const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+    let response: any;
+    let quotaHit = false;
 
     for (const model of modelsToTry) {
       try {
-        const response = await ai.models.generateContent({
+        const aiPromise = ai.models.generateContent({
           model,
-          contents: [
-            {
-              inlineData: { mimeType, data: base64Data },
-            },
-            {
-              text: `Analyze this grocery store circular ad image tile.
-Look for multi-buy deals (e.g., "2 for $10", "3 for $4", "2/$5", "10/$10").
-If found, set bundleQuantity (integer) and bundleTotalPrice (number).
-Respond ONLY with raw JSON:
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: optimizedContentType,
+                  data: base64Data,
+                },
+              },
+              {
+                text: `Analyze this grocery store circular ad image tile with high-accuracy OCR:
+1. Examine all visual text, yellow/red badges, bursts, banners, and price stamps.
+2. Check for multi-buys (e.g., "2 for $10", "2 for $4", "3 for $5", "4 for $10", "10 for $10").
+   - If found:
+     bundleQuantity: the integer count (e.g., 2)
+     bundleTotalPrice: the total bundle cost (e.g., 10.00)
+     unitSalePrice: bundleTotalPrice / bundleQuantity (e.g., 5.00)
+3. Check for unpriced promotions (e.g., "BUY 1 GET 2 FREE", "BOGO FREE", "50% OFF") with no base dollar amount:
+   - isUnpricedPromo: true
+   - unitSalePrice: 0.00
+4. Transcribe all visible text verbatim into promoBadgeText.
+
+Respond ONLY with valid JSON matching this schema:
 {
+  "hasPromoBadge": boolean,
+  "promoBadgeText": string,
   "bundleQuantity": number,
   "bundleTotalPrice": number,
+  "unitSalePrice": number,
   "isUnpricedPromo": boolean
-}`,
-            },
-          ],
+}`
+              },
+            ],
+          },
+          config: { responseMimeType: 'application/json' },
         });
-        if (response?.text) {
-          responseText = response.text;
+
+        // 10-second fuse to prevent backend deadlocks if Gemini stalls
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Vision OCR Timeout')), 10000)
+        );
+
+        response = await Promise.race([aiPromise, timeoutPromise]) as any;
+        
+        if (response?.text) break;
+      } catch (modelErr: any) {
+        const errMsg = modelErr?.message || String(modelErr);
+        const isQuota =
+          modelErr?.status === 'RESOURCE_EXHAUSTED' ||
+          modelErr?.code === 429 ||
+          errMsg.includes('429') ||
+          errMsg.includes('quota') ||
+          errMsg.includes('Quota exceeded') ||
+          errMsg.includes('RESOURCE_EXHAUSTED');
+
+        if (isQuota) {
+          quotaHit = true;
+          // Quota limit hit on project key: do not retry remaining models in loop
           break;
         }
-      } catch (apiErr: any) {
-        lastError = apiErr;
+        console.warn(`[OCR] Model ${model} failed or timed out:`, errMsg);
       }
     }
 
-    if (!responseText) {
-      if (lastError) return { subtitle: `DEBUG API: ${lastError.message?.substring(0, 40)}` };
-      return { subtitle: 'DEBUG: API Returned Empty Response' };
+    if (quotaHit) {
+      return { update: null, quotaExhausted: true };
     }
 
-    const cleanedText = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    if (!response?.text) {
+      return { update: null };
+    }
+
+    const cleanedText = response.text.replace(/```json/gi, '').replace(/```/g, '').trim();
     let parsed: any;
     try {
       parsed = JSON.parse(cleanedText);
     } catch (parseErr: any) {
-      return { subtitle: `DEBUG JSON: ${cleanedText.substring(0, 30)}` };
+      return { update: null };
     }
 
     if (parsed.bundleQuantity && parsed.bundleQuantity > 1 && parsed.bundleTotalPrice && parsed.bundleTotalPrice > 0) {
-      const singlePrice = Number((parsed.bundleTotalPrice / parsed.bundleQuantity).toFixed(2));
+      const singlePrice = parsed.unitSalePrice || Number((parsed.bundleTotalPrice / parsed.bundleQuantity).toFixed(2));
       return {
-        bundleQuantity: parsed.bundleQuantity,
-        bundleTotalPrice: parsed.bundleTotalPrice,
-        salePrice: singlePrice,
-        unitPrice: `$${singlePrice.toFixed(2)} each`,
-        normalizedUnitCost: singlePrice,
-        normalizedUnitType: deal.normalizedUnitType || 'unit',
-        unitDescription: `${parsed.bundleQuantity} for $${parsed.bundleTotalPrice.toFixed(2)} ($${singlePrice.toFixed(2)} ea)`,
-        dealType: 'multi_buy',
-        isUnpricedPromo: false,
-        subtitle: '',
+        update: {
+          bundleQuantity: parsed.bundleQuantity,
+          bundleTotalPrice: parsed.bundleTotalPrice,
+          salePrice: singlePrice,
+          unitPrice: `$${singlePrice.toFixed(2)} each`,
+          normalizedUnitCost: singlePrice,
+          normalizedUnitType: deal.normalizedUnitType || 'unit',
+          unitDescription: `${parsed.bundleQuantity} for $${parsed.bundleTotalPrice.toFixed(2)} ($${singlePrice.toFixed(2)} ea)`,
+          dealType: 'multi_buy',
+          isUnpricedPromo: false,
+          promoBadgeText: parsed.promoBadgeText || undefined,
+          subtitle: '',
+        },
       };
     }
 
     if (parsed.isUnpricedPromo) {
       return {
-        isUnpricedPromo: true,
-        salePrice: 0,
-        originalPrice: 0,
-        dealType: 'bogo',
-        subtitle: '',
+        update: {
+          isUnpricedPromo: true,
+          salePrice: 0,
+          originalPrice: 0,
+          dealType: 'bogo',
+          promoBadgeText: parsed.promoBadgeText || undefined,
+          subtitle: '',
+        },
       };
     }
 
-    return { subtitle: '' };
+    if (parsed.hasPromoBadge && parsed.promoBadgeText) {
+      return {
+        update: {
+          promoBadgeText: parsed.promoBadgeText,
+          subtitle: '',
+        },
+      };
+    }
+
+    return { update: null };
   } catch (err: any) {
-    if (err.name === 'AbortError') return { subtitle: 'DEBUG: Fetch Timeout' };
-    return { subtitle: `DEBUG Fatal: ${err.message?.substring(0, 30)}` };
+    return { update: null };
   }
 }
 
@@ -470,39 +532,53 @@ export async function enrichDealsWithOCR(
 ): Promise<DealItem[]> {
   const candidateDeals: DealItem[] = [];
 
-  // Filter candidates first
-  for (const deal of deals) {
-    const isWholeDollar = deal.salePrice >= 2 && Math.floor(deal.salePrice) === deal.salePrice;
-    const isUnpriced = !deal.salePrice || deal.salePrice === 0;
+  // Filter candidates and prioritize those most in need of OCR
+  // Priority 1: Unpriced items
+  // Priority 2: Suspected multi-buys with promo badges or whole dollar pricing
+  const unpricedCandidates: DealItem[] = [];
+  const multiBuyCandidates: DealItem[] = [];
 
-    if (deal.imageUrl && (isWholeDollar || isUnpriced)) {
-      candidateDeals.push(deal);
+  for (const deal of deals) {
+    if (!deal.imageUrl) continue;
+    const isUnpriced = !deal.salePrice || deal.salePrice === 0 || deal.isUnpricedPromo;
+    const hasPromoSignal = /bogo|buy|get|free|\d+\s*(?:for|\/)\s*\$?\d+|save/i.test(
+      `${deal.title} ${deal.subtitle || ''} ${deal.promoBadgeText || ''}`
+    );
+    const isWholeDollar = deal.salePrice >= 2 && Math.floor(deal.salePrice) === deal.salePrice;
+
+    if (isUnpriced) {
+      unpricedCandidates.push(deal);
+    } else if (hasPromoSignal || isWholeDollar) {
+      multiBuyCandidates.push(deal);
     }
+  }
+
+  // Cap OCR verification to a safe quota budget (e.g. max 3 candidates per search) to avoid 429 rate limit errors
+  const MAX_OCR_CANDIDATES = 3;
+  candidateDeals.push(...unpricedCandidates.slice(0, MAX_OCR_CANDIDATES));
+  if (candidateDeals.length < MAX_OCR_CANDIDATES) {
+    candidateDeals.push(...multiBuyCandidates.slice(0, MAX_OCR_CANDIDATES - candidateDeals.length));
   }
 
   if (candidateDeals.length === 0) return deals;
 
-  // NO QUOTA CAP: We process all candidates to intentionally expose 429 limits
   const ocrResults: { id: string; update: Partial<DealItem> | null }[] = [];
-  
-  // Staggering in chunks of 5 just to prevent browser/network level socket hangups
-  const chunkSize = 5;
+  let quotaExhausted = false;
 
-  for (let i = 0; i < candidateDeals.length; i += chunkSize) {
-    const chunk = candidateDeals.slice(i, i + chunkSize);
-    
-    const chunkResults = await Promise.all(
-      chunk.map(async (deal) => {
-        const update = await ocrVerifyDealTile(ai, deal);
-        return { id: deal.id, update };
-      })
-    );
-    
-    ocrResults.push(...chunkResults);
-
-    // Minor 1s delay so Vercel doesn't kill the TCP connections
-    if (i + chunkSize < candidateDeals.length) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+  for (const deal of candidateDeals) {
+    if (quotaExhausted) break;
+    try {
+      const { update, quotaExhausted: isExhausted } = await ocrVerifyDealTile(ai, deal);
+      if (isExhausted) {
+        quotaExhausted = true;
+        console.info('[Gemini OCR] Quota budget reached for image OCR; keeping standard circular data.');
+        break;
+      }
+      if (update) {
+        ocrResults.push({ id: deal.id, update });
+      }
+    } catch (err: any) {
+      console.warn('[Gemini OCR] Error processing candidate tile:', err?.message || err);
     }
   }
 
@@ -697,6 +773,17 @@ Return ONLY a valid JSON array of deal objects matching DealItem schema.
           }
         } catch (tierErr: any) {
           lastLlmError = tierErr;
+          const errMsg = tierErr?.message || String(tierErr);
+          const isQuota =
+            tierErr?.status === 'RESOURCE_EXHAUSTED' ||
+            tierErr?.code === 429 ||
+            errMsg.includes('429') ||
+            errMsg.includes('quota') ||
+            errMsg.includes('Quota exceeded') ||
+            errMsg.includes('RESOURCE_EXHAUSTED');
+          if (isQuota) {
+            break;
+          }
         }
       }
 
@@ -864,15 +951,17 @@ Requirements for each extracted item:
     try {
       response = await ai.models.generateContent({
         model: modelsToTry[i],
-        contents: [
-          {
-            inlineData: {
-              mimeType,
-              data: base64Data,
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                mimeType,
+                data: base64Data,
+              },
             },
-          },
-          { text: prompt },
-        ],
+            { text: prompt },
+          ],
+        },
         config: {
           responseMimeType: 'application/json',
           responseSchema: dealsResponseSchema,
@@ -946,15 +1035,17 @@ Rules:
       try {
         response = await ai.models.generateContent({
           model,
-          contents: [
-            prompt,
-            {
-              inlineData: {
-                data: base64Data,
-                mimeType: mimeType.startsWith('image/') ? mimeType : 'image/jpeg',
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  data: base64Data,
+                  mimeType: mimeType.startsWith('image/') ? mimeType : 'image/jpeg',
+                },
               },
-            },
-          ],
+              { text: prompt },
+            ],
+          },
           config: {
             responseMimeType: 'application/json',
             responseSchema: dealsResponseSchema,

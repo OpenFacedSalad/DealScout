@@ -1,3 +1,4 @@
+export const maxDuration = 60; // Forces Vercel to allow up to 60 seconds
 export const runtime = 'edge';
 
 import { geocodeQuery, reverseGeocodeCoords, getRegionalDefaultStores } from './_lib/storeFinder.js';
@@ -39,7 +40,7 @@ export async function GET(req: Request) {
       status: 'ok',
       service: 'DealScout Vercel Edge Gateway (Search Grounding & Multimodal OCR)',
       runtime: 'edge',
-      version: '2.8.0',
+      version: '2.9.3',
       pwa: true,
       timestamp: new Date().toISOString(),
     });

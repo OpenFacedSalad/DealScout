@@ -1,3 +1,4 @@
+export const maxDuration = 60; // Forces Vercel to allow up to 60 seconds
 export const runtime = 'edge';
 
 import { getCircularsForLocation } from '../_lib/geminiService.js';
