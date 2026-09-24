@@ -5,6 +5,10 @@ export function formatProductGroupName(group: string): string {
     ground_beef_80_20: 'Ground Beef (80/20)',
     boneless_chicken_breast: 'Boneless Chicken Breast',
     large_white_eggs: 'Large White Eggs (1 Dozen)',
+    eggs_large_12ct: 'Large Grade A Eggs (1 Dozen)',
+    frozen_waffles: 'Frozen Waffles',
+    fresh_eggplant: 'Fresh Eggplant',
+    frozen_egg_rolls: 'Frozen Egg Rolls',
     whole_milk_gallon: 'Whole Milk (1 Gallon)',
     honeycrisp_apples: 'Honeycrisp Apples',
     hass_avocados: 'Hass Avocados',
@@ -43,24 +47,42 @@ export function groupSimilarDeals(deals: DealItem[]): ComparisonGroup[] {
   const comparisonGroups: ComparisonGroup[] = [];
 
   groupMap.forEach((groupDeals, genericGroup) => {
-    const sortedDeals = [...groupDeals].sort((a, b) => a.normalizedUnitCost - b.normalizedUnitCost);
-    const bestDeal = sortedDeals[0];
-    const worstDeal = sortedDeals[sortedDeals.length - 1];
+    // 1. When mapping groups, filter out unpriced items for the math check
+    const comparableDeals = groupDeals.filter(
+      (d) => d.salePrice > 0 && d.normalizedUnitCost > 0 && !d.isUnpricedPromo
+    );
 
-    const uniqueStores = new Set(sortedDeals.map((d) => d.storeId));
-    const unitPriceDiff = worstDeal.normalizedUnitCost - bestDeal.normalizedUnitCost;
-    const maxSavingsPercent = worstDeal.normalizedUnitCost > 0
-      ? Math.round((unitPriceDiff / worstDeal.normalizedUnitCost) * 100)
+    // 2. Sort only the valid, priced deals to find the true winner
+    const sortedDeals = [...comparableDeals].sort(
+      (a, b) => a.normalizedUnitCost - b.normalizedUnitCost
+    );
+
+    const bestDeal = sortedDeals[0];
+    // 3. If there are no valid priced deals in the group, skip from comparison groups
+    if (!bestDeal) {
+      return;
+    }
+
+    const unpricedDeals = groupDeals.filter(
+      (d) => d.salePrice === 0 || d.isUnpricedPromo
+    );
+    const allGroupDeals = [...sortedDeals, ...unpricedDeals];
+
+    const uniqueStores = new Set(allGroupDeals.map((d) => d.storeId));
+    const highestPrice = Math.max(...comparableDeals.map((d) => d.normalizedUnitCost));
+    const unitPriceDiff = highestPrice > bestDeal.normalizedUnitCost ? highestPrice - bestDeal.normalizedUnitCost : 0;
+    const maxSavingsPercent = highestPrice > bestDeal.normalizedUnitCost
+      ? Math.round(((highestPrice - bestDeal.normalizedUnitCost) / highestPrice) * 100)
       : 0;
 
     comparisonGroups.push({
       genericProductGroup: genericGroup,
       productName: formatProductGroupName(genericGroup),
       category: bestDeal.category,
-      deals: sortedDeals,
+      deals: allGroupDeals,
       bestDeal,
       totalStores: uniqueStores.size,
-      unitType: bestDeal.normalizedUnitType,
+      unitType: bestDeal.normalizedUnitType || 'each',
       unitPriceDiff: Number(unitPriceDiff.toFixed(2)),
       maxSavingsPercent,
     });

@@ -10,14 +10,18 @@ import {
   Plus,
   Check,
   Percent,
+  X,
+  ExternalLink,
 } from 'lucide-react';
 import { ComparisonGroup, Store, ShoppingListItem, DealItem, DealCategory } from '../types';
+import DealCard from './DealCard';
 
 interface DealComparisonViewProps {
   groups: ComparisonGroup[];
   stores: Store[];
   shoppingList: ShoppingListItem[];
   onToggleList: (deal: DealItem) => void;
+  onAddToList?: (deal: DealItem) => void;
   onOpenDetailModal: (group: ComparisonGroup) => void;
 }
 
@@ -26,11 +30,15 @@ export default function DealComparisonView({
   stores,
   shoppingList,
   onToggleList,
+  onAddToList,
   onOpenDetailModal,
 }: DealComparisonViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<'all' | DealCategory>('all');
   const [onlyMultiStore, setOnlyMultiStore] = useState(true);
+  const [verificationDeal, setVerificationDeal] = useState<DealItem | null>(null);
+
+  const handleAddToList = onAddToList || onToggleList;
 
   const listDealIds = useMemo(() => {
     return new Set(
@@ -109,9 +117,27 @@ export default function DealComparisonView({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.currentTarget.blur();
+                window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+              }
+            }}
             placeholder="Filter commodities (e.g. ground beef, eggs, milk, bread)..."
-            className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
+            className="w-full pl-10 pr-10 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-base sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
           />
+          {searchQuery && (
+            <button
+              onClick={() => {
+                setSearchQuery('');
+                window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+              }}
+              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full"
+              aria-label="Clear search"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         <div className="flex items-center space-x-2">
@@ -141,9 +167,33 @@ export default function DealComparisonView({
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           {filteredGroups.map((group, gIdx) => {
-            const best = group.bestDeal;
-            const runnersUp = group.deals.slice(1);
-            const isBestInList = listDealIds.has(best.id);
+            // 1. Filter out unpriced items for the math check
+            const comparableDeals = group.deals.filter(
+              (d) => d.salePrice > 0 && d.normalizedUnitCost > 0 && !d.isUnpricedPromo
+            );
+
+            // 2. Sort only the valid, priced deals to find the true winner
+            const sortedDeals = [...comparableDeals].sort(
+              (a, b) => a.normalizedUnitCost - b.normalizedUnitCost
+            );
+
+            const bestDeal = sortedDeals[0] || group.bestDeal;
+
+            // 3. If there are no valid priced deals in the group, skip rendering it in the comparison tab
+            if (!bestDeal || bestDeal.salePrice <= 0 || bestDeal.isUnpricedPromo) {
+              return null;
+            }
+
+            // Calculate savings based on the highest price in the comparable group vs the best deal
+            const highestPrice = comparableDeals.length > 0
+              ? Math.max(...comparableDeals.map((d) => d.normalizedUnitCost))
+              : bestDeal.normalizedUnitCost;
+            const percentSaved = highestPrice > bestDeal.normalizedUnitCost
+              ? Math.round(((highestPrice - bestDeal.normalizedUnitCost) / highestPrice) * 100)
+              : 0;
+
+            const runnersUp = group.deals.filter((d) => d.id !== bestDeal.id);
+            const isBestInList = listDealIds.has(bestDeal.id);
 
             return (
               <div
@@ -173,16 +223,20 @@ export default function DealComparisonView({
                     </span>
                   </div>
 
-                  <div className="bg-gradient-to-br from-emerald-50/70 to-teal-50/30 rounded-xl p-4 border border-emerald-200/80 mb-4">
+                  <div
+                    onClick={() => setVerificationDeal(bestDeal)}
+                    className="bg-gradient-to-br from-emerald-50/70 to-teal-50/30 rounded-xl p-4 border border-emerald-200/80 mb-4 cursor-pointer hover:border-emerald-300 hover:shadow-xs transition"
+                    title="Click to verify circular source card"
+                  >
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center space-x-1.5 text-xs font-bold text-emerald-800 uppercase tracking-wider">
                         <Award className="w-4 h-4 text-emerald-600" />
                         <span>Best Local Deal</span>
                       </div>
-                      {group.maxSavingsPercent > 0 && (
+                      {percentSaved > 0 && (
                         <span className="flex items-center space-x-1 px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[11px] font-bold">
                           <TrendingDown className="w-3 h-3" />
-                          <span>Save {group.maxSavingsPercent}%</span>
+                          <span>Save {percentSaved}%</span>
                         </span>
                       )}
                     </div>
@@ -192,23 +246,26 @@ export default function DealComparisonView({
                         <div className="flex items-center space-x-2">
                           <span
                             className="px-2 py-0.5 rounded text-[10px] font-black uppercase"
-                            style={{ backgroundColor: best.storeLogoBg, color: best.storeLogoText }}
+                            style={{ backgroundColor: bestDeal.storeLogoBg, color: bestDeal.storeLogoText }}
                           >
-                            {best.storeLogoText}
+                            {bestDeal.storeLogoText}
                           </span>
                           <span className="text-xs font-bold text-slate-900 truncate max-w-[160px]">
-                            {best.storeName}
+                            {bestDeal.storeName}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-600 font-medium line-clamp-1">{best.title}</p>
+                        <p className="text-xs text-slate-600 font-medium line-clamp-1">{bestDeal.title}</p>
                       </div>
 
                       <div className="text-right shrink-0">
                         <div className="text-lg font-black text-emerald-800 font-mono leading-none">
-                          {best.unitPrice}
+                          ${Number(bestDeal.normalizedUnitCost || bestDeal.salePrice).toFixed(2)}
+                          <span className="text-xs text-slate-500 font-normal ml-1">
+                            / {bestDeal.normalizedUnitType || 'ea'}
+                          </span>
                         </div>
                         <span className="text-[11px] text-slate-500 font-medium">
-                          ${best.salePrice.toFixed(2)} pkg
+                          ${bestDeal.salePrice.toFixed(2)} pkg
                         </span>
                       </div>
                     </div>
@@ -220,17 +277,21 @@ export default function DealComparisonView({
                         Other Store Offers:
                       </span>
                       {runnersUp.map((deal, rIdx) => {
-                        const unitDelta = deal.normalizedUnitCost - best.normalizedUnitCost;
-                        const pctHigher = best.normalizedUnitCost > 0
-                          ? Math.round((unitDelta / best.normalizedUnitCost) * 100)
+                        const isUnpriced = deal.isUnpricedPromo || deal.salePrice === 0;
+                        const unitDelta = deal.normalizedUnitCost - bestDeal.normalizedUnitCost;
+                        const pctHigher = !isUnpriced && bestDeal.normalizedUnitCost > 0 && unitDelta > 0
+                          ? Math.round((unitDelta / bestDeal.normalizedUnitCost) * 100)
                           : 0;
+                        const isRunnerInList = listDealIds.has(deal.id);
 
                         return (
                           <div
                             key={deal.id ? `runner-${deal.id}` : `runner-${deal.storeId || 'store'}-${rIdx}`}
-                            className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs"
+                            onClick={() => setVerificationDeal(deal)}
+                            className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100 hover:bg-slate-100/80 hover:border-emerald-200 transition text-left cursor-pointer group text-xs"
+                            title="Click to verify circular source card"
                           >
-                            <div className="flex items-center space-x-2 truncate mr-2">
+                            <div className="flex items-center space-x-2 truncate mr-2 flex-1 min-w-0">
                               <span
                                 className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase shrink-0"
                                 style={{ backgroundColor: deal.storeLogoBg, color: deal.storeLogoText }}
@@ -242,13 +303,52 @@ export default function DealComparisonView({
                               </span>
                             </div>
 
-                            <div className="flex items-center space-x-3 shrink-0">
-                              <span className="font-mono font-bold text-slate-800">
-                                {deal.unitPrice}
-                              </span>
-                              <span className="text-[11px] font-bold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded">
-                                +{pctHigher}%
-                              </span>
+                            <div className="flex items-center space-x-2.5 shrink-0 ml-2">
+                              <div className="flex flex-col text-right">
+                                {isUnpriced ? (
+                                  <span className="font-semibold text-slate-700">Varies in-store</span>
+                                ) : (
+                                  <span className="font-bold text-slate-900 font-mono">
+                                    ${Number(deal.normalizedUnitCost || deal.salePrice).toFixed(2)}
+                                    <span className="text-xs text-slate-500 font-normal ml-1">
+                                      / {deal.normalizedUnitType || 'ea'}
+                                    </span>
+                                  </span>
+                                )}
+                              </div>
+                              {pctHigher > 0 && (
+                                <span className="text-[11px] font-bold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded">
+                                  +{pctHigher}%
+                                </span>
+                              )}
+                              {isUnpriced && (
+                                <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
+                                  Promo
+                                </span>
+                              )}
+
+                              {/* Explicit Add to List Button */}
+                              {handleAddToList && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation(); // Prevents the verification modal from opening
+                                    handleAddToList(deal);
+                                  }}
+                                  className={`p-1.5 rounded-lg transition shrink-0 ${
+                                    isRunnerInList
+                                      ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                                      : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800'
+                                  }`}
+                                  title={isRunnerInList ? 'Saved in shopping list' : `Add ${deal.storeName} deal to list`}
+                                  aria-label={`Add ${deal.storeName} deal to list`}
+                                >
+                                  {isRunnerInList ? (
+                                    <Check className="w-3.5 h-3.5" />
+                                  ) : (
+                                    <Plus className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
+                              )}
                             </div>
                           </div>
                         );
@@ -268,7 +368,7 @@ export default function DealComparisonView({
                   </button>
 
                   <button
-                    onClick={() => onToggleList(best)}
+                    onClick={() => onToggleList(bestDeal)}
                     className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 shrink-0 ${
                       isBestInList
                         ? 'bg-emerald-600 text-white hover:bg-emerald-700'
@@ -292,6 +392,45 @@ export default function DealComparisonView({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Source Verification Modal Overlay */}
+      {verificationDeal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => setVerificationDeal(null)}
+        >
+          <div
+            className="relative w-full max-w-sm animate-in fade-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close Button */}
+            <div className="flex justify-end w-full mb-2">
+              <button
+                onClick={() => setVerificationDeal(null)}
+                className="bg-slate-800/80 hover:bg-slate-800 text-white rounded-full p-2 backdrop-blur-md transition shadow-md"
+                aria-label="Close verification modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Render the exact circular item */}
+            <div className="shadow-2xl rounded-2xl overflow-hidden bg-white">
+              <DealCard
+                deal={verificationDeal}
+                onToggleList={onToggleList}
+                isInList={listDealIds.has(verificationDeal.id)}
+              />
+            </div>
+
+            <div className="mt-3 text-center">
+              <p className="text-xs font-bold text-white/90 uppercase tracking-widest bg-slate-900/40 backdrop-blur-xs py-1 px-3 rounded-full inline-block">
+                Source Circular Verification
+              </p>
+            </div>
+          </div>
         </div>
       )}
     </div>

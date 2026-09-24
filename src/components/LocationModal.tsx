@@ -87,7 +87,15 @@ export default function LocationModal({
 
   if (!isOpen) return null;
 
+  const resetMobileViewport = () => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+  };
+
   const handleSelectSuggestion = (s: any) => {
+    resetMobileViewport();
     const lat = parseFloat(s.lat);
     const lng = parseFloat(s.lon);
     const addr = s.address || {};
@@ -113,6 +121,7 @@ export default function LocationModal({
     e.preventDefault();
     if (!query.trim()) return;
 
+    resetMobileViewport();
     setIsResolving(true);
     setErrorMessage(null);
 
@@ -148,6 +157,7 @@ export default function LocationModal({
   };
 
   const handleSelectPreset = (preset: (typeof PRESET_LOCATIONS)[0]) => {
+    resetMobileViewport();
     const presetLocation: UserLocation = {
       latitude: preset.lat,
       longitude: preset.lng,
@@ -159,6 +169,11 @@ export default function LocationModal({
       radiusMiles: selectedRadius,
     };
     onSave(presetLocation, selectedRadius);
+  };
+
+  const handleGPSClick = () => {
+    resetMobileViewport();
+    onDetectGPS();
   };
 
   return (
@@ -219,7 +234,7 @@ export default function LocationModal({
             </label>
             <button
               type="button"
-              onClick={onDetectGPS}
+              onClick={handleGPSClick}
               disabled={isGpsLocating}
               className="w-full flex items-center justify-center space-x-2 py-3 px-4 rounded-xl border border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100/70 text-emerald-800 text-xs font-bold transition shadow-2xs"
             >
@@ -249,7 +264,8 @@ export default function LocationModal({
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="e.g. 17050, Mechanicsburg PA, Austin TX"
-                  className="w-full pl-9 pr-8 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
+                  className="w-full pl-9 pr-8 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-base sm:text-sm font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
+                  style={{ fontSize: '16px' }}
                 />
                 {isSearching && (
                   <div className="absolute right-2.5 top-1/2 -translate-y-1/2">

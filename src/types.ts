@@ -20,10 +20,12 @@ export type DealType =
 export type NormalizedUnitType =
   | 'lb'
   | 'oz'
+  | 'dozen'
+  | 'pkg'
+  | 'each'
   | 'unit'
   | 'gallon'
-  | 'count'
-  | 'dozen';
+  | 'count';
 
 export type QualityTier =
   | 'budget'
@@ -80,6 +82,8 @@ export interface DealItem {
   validUntil: string;
   inStock: boolean;
   genericProductGroup: string;
+  flavorOrBrand?: string;
+  coreBaseNoun?: string;
   tags: string[];
   brand?: string;
   qualityTier?: QualityTier;

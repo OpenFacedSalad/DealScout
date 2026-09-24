@@ -57,6 +57,14 @@ export const dealsResponseSchema: Schema = {
         description: "Product name and brand without promo badge slogans" 
       },
       subtitle: { type: Type.STRING },
+      flavorOrBrand: {
+        type: Type.STRING,
+        description: "STEP 1: Extract any brand names, flavors, or adjectives (e.g., 'Strawberry', 'Butternut', 'A.1.'). If none, leave blank."
+      },
+      coreBaseNoun: {
+        type: Type.STRING,
+        description: "STEP 2: Identify the fundamental physical object being sold (e.g., 'Soda', 'Pastry', 'Squash', 'Sauce'). NEVER include the flavor or brand."
+      },
       category: {
         type: Type.STRING,
         enum: [
@@ -89,7 +97,7 @@ export const dealsResponseSchema: Schema = {
       normalizedUnitCost: { type: Type.NUMBER },
       normalizedUnitType: {
         type: Type.STRING,
-        enum: ['lb', 'oz', 'unit', 'gallon', 'count', 'dozen'],
+        enum: ['lb', 'oz', 'dozen', 'pkg', 'each', 'unit', 'gallon', 'count'],
       },
       unitDescription: { type: Type.STRING },
       dealType: {
@@ -142,6 +150,8 @@ export const dealsResponseSchema: Schema = {
       'storeLogoBg',
       'storeLogoText',
       'title',
+      'flavorOrBrand',
+      'coreBaseNoun',
       'category',
       'originalPrice',
       'salePrice',
@@ -329,10 +339,24 @@ export function sanitizeAndValidateDeals(rawDeals: DealItem[]): DealItem[] {
       }
 
       // Recalculate normalized unit cost if single unit and not unpriced promo
-      if (!deal.isUnpricedPromo && (!deal.normalizedUnitCost || isNaN(deal.normalizedUnitCost) || deal.normalizedUnitCost === 0)) {
-        deal.normalizedUnitCost = deal.salePrice;
-        deal.normalizedUnitType = deal.normalizedUnitType || 'unit';
-        deal.unitPrice = `$${deal.salePrice.toFixed(2)} / ${deal.normalizedUnitType}`;
+      const validUnits = ['lb', 'oz', 'dozen', 'pkg', 'each'];
+      let nType = (deal.normalizedUnitType || '').toLowerCase();
+      if (!validUnits.includes(nType)) {
+        if (nType === 'unit' || nType === 'count') {
+          nType = 'each';
+        } else {
+          nType = 'each';
+        }
+      }
+
+      const nCost = deal.normalizedUnitCost && !isNaN(Number(deal.normalizedUnitCost)) && Number(deal.normalizedUnitCost) > 0
+        ? Number(deal.normalizedUnitCost)
+        : (deal.salePrice || 0);
+
+      deal.normalizedUnitCost = deal.isUnpricedPromo ? 0 : nCost;
+      deal.normalizedUnitType = nType;
+      if (!deal.unitPrice || deal.unitPrice === 'undefined' || deal.unitPrice === '$0.00 / undefined') {
+        deal.unitPrice = deal.isUnpricedPromo ? 'Free / Unpriced' : `$${deal.normalizedUnitCost.toFixed(2)} / ${deal.normalizedUnitType}`;
       }
 
       // Strip non-verified MSRPs
@@ -340,6 +364,18 @@ export function sanitizeAndValidateDeals(rawDeals: DealItem[]): DealItem[] {
         deal.originalPrice = deal.salePrice;
         deal.discountPercent = 0;
       }
+
+      const rawTitle = (deal.title || '').toLowerCase();
+      if (!deal.genericProductGroup) {
+        deal.genericProductGroup = `${deal.category || 'grocery'}_${rawTitle.replace(/[^a-z0-9]/g, '_').substring(0, 15)}_default`;
+      }
+
+      // Inject AI Chain of Thought into the subtitle for visual debugging
+      const debugNoun = deal.coreBaseNoun || 'UNKNOWN_NOUN';
+      const debugKey = deal.genericProductGroup || 'UNKNOWN_KEY';
+      
+      const originalSubtitle = deal.subtitle ? deal.subtitle + ' | ' : '';
+      deal.subtitle = `${originalSubtitle}Noun: [${debugNoun}] -> Key: [${debugKey}]`;
 
       return deal;
     });
@@ -392,7 +428,7 @@ async function ocrVerifyDealTile(
     const base64Data = resizedBuffer.toString('base64');
     const optimizedContentType = 'image/jpeg';
 
-    const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+    const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
     let response: any;
     let quotaHit = false;
 
@@ -459,7 +495,19 @@ Respond ONLY with valid JSON matching this schema:
           // Quota limit hit on project key: do not retry remaining models in loop
           break;
         }
-        console.warn(`[OCR] Model ${model} failed or timed out:`, errMsg);
+
+        const isUnavailable =
+          modelErr?.status === 'UNAVAILABLE' ||
+          modelErr?.code === 503 ||
+          errMsg.includes('503') ||
+          errMsg.includes('UNAVAILABLE') ||
+          errMsg.includes('high demand');
+
+        if (isUnavailable) {
+          console.info(`[OCR] Model ${model} unavailable (high demand); trying fallback model.`);
+        } else {
+          console.info(`[OCR] Model ${model} did not complete; trying fallback model.`);
+        }
       }
     }
 
@@ -619,7 +667,13 @@ export async function getCircularsForLocation(
   let osmStores: Store[] = [];
 
   try {
-    osmStores = await findPhysicalGroceryStoresOSM(lat, lng, radiusMiles);
+    const timeoutPromise = new Promise<Store[]>((_, reject) =>
+      setTimeout(() => reject(new Error('OSM POI timeout')), 8000)
+    );
+    osmStores = await Promise.race([
+      findPhysicalGroceryStoresOSM(lat, lng, radiusMiles),
+      timeoutPromise,
+    ]);
   } catch (err: any) {
     console.info('[GeminiService] OSM discovery fallback to regional directory:', err?.message || err);
   }
@@ -703,26 +757,29 @@ ${searchInstructions}
 Target Supermarkets:
 ${JSON.stringify(storeSummary, null, 2)}
 
-CRITICAL STEP-BY-STEP TRANSCRIPTION & PRICING RULES:
-1. STEP 1 (OCR FIRST):
-   You MUST begin every deal extraction by transcribing every piece of text visible on the image tile or circular listing into 'ocrTranscript'.
-   Read every badge, banner, small print, and large number verbatim.
-2. STEP 2 (DETECT MULTI-BUYS):
-   Inspect your 'ocrTranscript'. If it contains any variation of 'X for $Y', 'X/$Y', or 'Buy X for $Y':
-   - Set promoBadgeText = 'X for $Y'
-   - Set bundleQuantity = X
-   - Set bundleTotalPrice = Y
-   - CALCULATE: salePrice = Y / X (e.g., for '2 for $4', salePrice MUST be 2.00. NEVER set salePrice to 4.00).
-   - Set unitPrice = '$' + (Y / X).toFixed(2) + ' each'
-3. STEP 3 (UNPRICED PROMOTIONS):
-   If 'ocrTranscript' contains 'BUY 1 GET 1 FREE', 'BUY 1 GET 2 FREE', or '% OFF' but NO dollar amount is printed anywhere:
-   - Set isUnpricedPromo = true
-   - Set salePrice = 0.00
-   - Set originalPrice = 0.00
-   - Set discountPercent = 0
-   - DO NOT INVENT A $3.99 OR ANY PLACEHOLDER PRICE.
-4. STEP 4 (NO FABRICATED DISCOUNTS):
-   If no original/strikethrough price is printed, set originalPrice = salePrice and discountPercent = 0.
+CRITICAL INSTRUCTIONS:
+1. Extract REAL advertised items and prices. Do NOT invent prices.
+2. DICTIONARY MAPPING (CRITICAL): 
+   - You MUST first deconstruct the item into "flavorOrBrand" and "coreBaseNoun".
+   - Your final "genericProductGroup" MUST be selected based ONLY on the "coreBaseNoun", entirely ignoring the "flavorOrBrand".
+   - Example: "Strawberry Prebiotic Soda" -> flavorOrBrand: "Strawberry Prebiotic", coreBaseNoun: "Soda". Maps to "beverages_soda".
+   - Example: "Butternut Squash" -> flavorOrBrand: "Butternut", coreBaseNoun: "Squash". Maps to "produce_squash".
+
+   Map to EXACTLY ONE string from this Allowed Product Keys array:
+   [
+     "produce_apple", "produce_banana", "produce_berries", "produce_grapes", "produce_citrus", "produce_potato", "produce_onion", "produce_squash", "produce_other",
+     "meat_chicken_breast", "meat_chicken_other", "meat_beef_steak", "meat_beef_ground", "meat_pork", "meat_bacon", "meat_seafood_shrimp", "meat_seafood_fish",
+     "dairy_milk", "dairy_butter", "dairy_margarine", "dairy_eggs", "dairy_cheese_shredded", "dairy_cheese_block", "dairy_yogurt",
+     "pantry_cereal", "pantry_coffee", "pantry_pasta", "pantry_sauce", "pantry_snacks",
+     "frozen_pizza", "frozen_waffles_pancakes", "frozen_ice_cream", "frozen_pastry", "frozen_meals",
+     "beverages_soda", "beverages_water", "beverages_juice",
+     "household_paper", "household_cleaning",
+     "uncategorized_general"
+   ]
+3. Math & Normalization: You must populate "normalizedUnitType" with EXACTLY one of these values: "lb", "oz", "dozen", "pkg", or "each".
+4. Calculate "normalizedUnitCost" as a number based on that unit.
+5. For multi-buys ("2 for $5"): bundleQuantity: 2, bundleTotalPrice: 5.00, salePrice: 2.50, dealType: "multi_buy".
+6. For BOGO without price: isUnpricedPromo: true, salePrice: 0, dealType: "bogo".
 
 STRICT EXCLUSIONS & FILTERS:
 1. FOOD & GROCERY ONLY:
@@ -741,7 +798,7 @@ Extract authentic advertised items, sales, and butcher shop specials.
 Return ONLY a valid JSON array of deal objects matching DealItem schema.
 `;
 
-      const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+      const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
       let lastLlmError: any = null;
       for (let i = 0; i < modelsToTry.length; i++) {
         try {
@@ -945,7 +1002,7 @@ Requirements for each extracted item:
 23. "hasExplicitOriginalPrice": Boolean (true ONLY if regular/crossed-out price is printed).
 `;
 
-  const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+  const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
   let response;
   for (let i = 0; i < modelsToTry.length; i++) {
     try {
@@ -1028,7 +1085,7 @@ Rules:
 `;
 
     // 3. Send Multimodal Request with model fallback
-    const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+    const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
     let response: any = null;
 
     for (const model of modelsToTry) {
@@ -1083,108 +1140,85 @@ Rules:
 export async function compareDealsWithAI(
   productGroupName: string,
   deals: DealItem[]
-): Promise<AIComparisonResult> {
-  if (!deals || deals.length === 0) {
-    throw new Error('Cannot compare an empty list of deals.');
-  }
+): Promise<{
+  bestDealId: string;
+  verdict: string;
+  keyDifference: string;
+  unitPriceAdvantage: string;
+  caveats?: string;
+}> {
+  const ai = getAiClient();
+  
+  // 1. STRICT FILTER: Remove unpriced promos, BOGOs without prices, or "varies in store" items
+  const validDeals = (deals || []).filter((d) => d.salePrice > 0 && !d.isUnpricedPromo);
 
-  if (deals.length === 1) {
-    const single = deals[0];
+  if (!ai || validDeals.length < 2) {
+    const fallbackBest = [...validDeals].sort((a, b) => a.normalizedUnitCost - b.normalizedUnitCost)[0];
+    
+    if (!fallbackBest) {
+      return {
+        bestDealId: '',
+        verdict: 'Cannot compare deals as no items have listed local prices (e.g., unpriced BOGO or varies-in-store).',
+        keyDifference: 'Missing price data.',
+        unitPriceAdvantage: 'N/A',
+      };
+    }
+
     return {
-      bestDealId: single.id,
-      verdict: `Sole offer available at ${single.storeName}.`,
-      keyDifference: `No competing circular deals found in your area.`,
-      unitPriceAdvantage: `${single.unitPrice}`,
-      caveats: single.dealType === 'digital_coupon' ? 'Requires digital coupon clipping.' : 'None',
+      bestDealId: fallbackBest.id,
+      verdict: `Best listed price is at ${fallbackBest.storeName}. Other stores did not list a verifiable price.`,
+      keyDifference: 'Lowest verifiable price.',
+      unitPriceAdvantage: `${fallbackBest.unitPrice}`,
+      caveats: fallbackBest.dealType === 'digital_coupon' ? 'Requires digital coupon clipping.' : undefined,
     };
   }
 
-  const ai = getAiClient();
-  if (!ai) {
-    return generateDeterministicComparison(productGroupName, deals);
-  }
+  // 2. ENFORCE STRICT NORMALIZED UNITS IN PROMPT
+  const prompt = `
+Compare these competing grocery deals for "${productGroupName}":
+${JSON.stringify(validDeals, null, 2)}
 
-  try {
-    const prompt = `
-Analyze these competing supermarket deals for the product commodity "${productGroupName}".
-Identify the single best purchase based on true unit cost, quality tier, and purchase friction.
+CRITICAL MATH & UNIT RULES:
+1. You MUST standardize and compare these items using ONLY one of these exact units: "1 lb", "1 oz", "1 dozen", "1 pkg", or "1 each".
+2. You MUST do the math to convert varying sizes. (e.g., If Store A sells 16 oz for $4.00, and Store B sells 2 lbs for $6.00, convert both to "1 lb" to find the true winner).
+3. Base your verdict strictly on the lowest calculated cost per standardized unit.
 
-Competing Deals:
-${JSON.stringify(deals, null, 2)}
-
-Evaluation Criteria:
-1. True Normalized Unit Cost ($/lb, $/oz, $/egg, etc.) is the top factor.
-2. Note if a lower price requires buying multiples (e.g. Buy 2 Get 1 Free, Must Buy 3) or digital loyalty coupons.
-3. Compare quality tiers (Organic/Grass-fed vs Conventional).
+Respond ONLY with JSON:
+{
+  "bestDealId": "exact id of winning deal",
+  "verdict": "1-2 decisive sentences explaining the winner based on normalized math.",
+  "keyDifference": "savings delta or size difference (e.g., 'Store A is cheaper per lb, but Store B has smaller packages')",
+  "unitPriceAdvantage": "e.g., $1.99/lb vs $2.50/lb - 20% cheaper",
+  "caveats": "membership, digital coupon, or minimum quantity rules"
+}
 `;
 
-    const modelsToTry = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
-    let response;
-    for (let i = 0; i < modelsToTry.length; i++) {
-      try {
-        response = await ai.models.generateContent({
-          model: modelsToTry[i],
-          contents: prompt,
-          config: {
-            responseMimeType: 'application/json',
-            responseSchema: comparisonResponseSchema,
-            temperature: 0.1,
-          },
-        });
-        if (response?.text) break;
-      } catch {
-        // Continue to next model tier
-      }
-    }
+  const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+  for (const model of modelsToTry) {
+    try {
+      const res = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: { responseMimeType: 'application/json' },
+      });
 
-    if (response?.text) {
-      const parsed = parseJsonFromText<AIComparisonResult | null>(response.text, null);
+      const clean = (res.text || '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(clean);
       if (parsed && parsed.bestDealId && parsed.verdict) {
         return parsed;
       }
+    } catch {
+      // Continue to next model or fallback
     }
-  } catch {
-    // Utilize deterministic fallback
   }
 
-  return generateDeterministicComparison(productGroupName, deals);
-}
-
-
-function generateDeterministicComparison(
-  productGroupName: string,
-  deals: DealItem[]
-): AIComparisonResult {
-  const sorted = [...deals].sort((a, b) => a.normalizedUnitCost - b.normalizedUnitCost);
-  const best = sorted[0];
-  const runnerUp = sorted[1];
-
-  const diff = runnerUp ? runnerUp.normalizedUnitCost - best.normalizedUnitCost : 0;
-  const pctDiff = runnerUp ? Math.round((diff / runnerUp.normalizedUnitCost) * 100) : 0;
-
-  const advantageStr = runnerUp
-    ? `${best.unitPrice} at ${best.storeName} vs ${runnerUp.unitPrice} at ${runnerUp.storeName} (${pctDiff}% cheaper)`
-    : `${best.unitPrice} at ${best.storeName}`;
-
-  let caveats = 'No special purchase restrictions noted.';
-  if (best.dealType === 'digital_coupon') {
-    caveats = 'Requires clipping a digital coupon in the store app.';
-  } else if (best.dealType === 'bogo') {
-    caveats = 'Requires purchasing two items to receive the promotional price.';
-  } else if (best.dealType === 'multi_buy') {
-    caveats = 'Price valid only when purchasing specified quantity.';
-  }
-
-  const prettyName = productGroupName.replace(/_/g, ' ');
-
+  const sorted = [...validDeals].sort((a, b) => a.normalizedUnitCost - b.normalizedUnitCost);
   return {
-    bestDealId: best.id,
-    verdict: `${best.storeName} offers the lowest true cost on ${prettyName}, saving you money per unit.`,
-    keyDifference: runnerUp
-      ? `Save $${diff.toFixed(2)} per ${best.normalizedUnitType} compared to ${runnerUp.storeName}.`
-      : 'Lowest available unit price among local circulars.',
-    unitPriceAdvantage: advantageStr,
-    caveats,
+    bestDealId: sorted[0]?.id || '',
+    verdict: `Best unit price is offered by ${sorted[0]?.storeName}.`,
+    keyDifference: 'Direct mathematical unit cost winner.',
+    unitPriceAdvantage: `${sorted[0]?.unitPrice}`,
+    caveats: sorted[0]?.dealType === 'digital_coupon' ? 'Requires clipping a digital coupon in the store app.' : undefined,
   };
 }
 

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Search,
   Store as StoreIcon,
@@ -63,6 +63,18 @@ export default function CircularsView({
   const [promoFilter, setPromoFilter] = useState<PromoFilter>('all');
   const [sortBy, setSortBy] = useState<SortOption>('discount');
 
+  // Ensure switching store tabs always snaps the view back to the top
+  useEffect(() => {
+    // Scroll window to top
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    // If deals are contained in an internal scroll container, reset it as well:
+    const dealsContainer = document.getElementById('deals-container');
+    if (dealsContainer) {
+      dealsContainer.scrollTop = 0;
+    }
+  }, [selectedStoreId]);
+
   const activeStore = useMemo(() => {
     if (selectedStoreId === 'all') return null;
     return stores.find((s) => s.id === selectedStoreId) || null;
@@ -93,32 +105,39 @@ export default function CircularsView({
 
   const displayedDeals = useMemo(() => {
     let result = deals.filter((deal) => {
-      if (selectedStoreId !== 'all' && deal.storeId !== selectedStoreId) {
+      // 1. STRICT TEXT SEARCH (Titles & Subtitles ONLY, NEVER Categories)
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase().trim();
+        const titleMatch = deal.title.toLowerCase().includes(query);
+        const subMatch = deal.subtitle ? deal.subtitle.toLowerCase().includes(query) : false;
+        
+        if (!titleMatch && !subMatch) return false;
+      }
+
+      // 2. STORE TAB FILTER
+      if (selectedStoreId && selectedStoreId !== 'all' && deal.storeId !== selectedStoreId) {
         return false;
       }
-      if (selectedCategory !== 'all' && deal.category !== selectedCategory) {
-        return false;
+
+      // 3. PRE-BUILT UI FILTERS (BOGO, 35% Off, Digital Coupons, Organic)
+      if (promoFilter === 'bogo') {
+        if (!deal.isUnpricedPromo && deal.dealType !== 'bogo') return false;
       }
-      if (promoFilter === 'bogo' && deal.dealType !== 'bogo') {
-        return false;
+      if (promoFilter === 'high_discount' || (promoFilter as string) === '35_off') {
+        if (deal.discountPercent < 35) return false;
       }
       if (promoFilter === 'digital_coupon' && deal.dealType !== 'digital_coupon') {
-        return false;
-      }
-      if (promoFilter === 'high_discount' && deal.discountPercent < 35) {
         return false;
       }
       if (promoFilter === 'organic' && deal.qualityTier !== 'organic' && !deal.tags.includes('organic')) {
         return false;
       }
-      if (searchQuery.trim()) {
-        const query = searchQuery.toLowerCase();
-        const matchesTitle = deal.title.toLowerCase().includes(query);
-        const matchesStore = deal.storeName.toLowerCase().includes(query);
-        const matchesBrand = deal.brand ? deal.brand.toLowerCase().includes(query) : false;
-        const matchesTags = deal.tags.some((t) => t.toLowerCase().includes(query));
-        return matchesTitle || matchesStore || matchesBrand || matchesTags;
+
+      // 4. CATEGORY FILTER
+      if (selectedCategory !== 'all' && deal.category !== selectedCategory) {
+        return false;
       }
+
       return true;
     });
 
@@ -176,7 +195,10 @@ export default function CircularsView({
       <div className="sticky top-0 z-30 bg-slate-50/95 backdrop-blur-md py-3 border-b border-slate-200 shadow-sm w-full">
         <div className="flex items-center space-x-2 overflow-x-auto scrollbar-none w-full px-1">
           <button
-            onClick={() => setSelectedStoreId('all')}
+            onClick={() => {
+              setSelectedStoreId('all');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition shadow-2xs shrink-0 ${
               selectedStoreId === 'all'
                 ? 'bg-slate-900 text-white'
@@ -197,7 +219,10 @@ export default function CircularsView({
           {stores.map((store, sIdx) => (
             <button
               key={store.id ? `store-${store.id}` : `store-idx-${sIdx}`}
-              onClick={() => setSelectedStoreId(store.id)}
+              onClick={() => {
+                setSelectedStoreId(store.id);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
               className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition shadow-2xs border shrink-0 ${
                 selectedStoreId === store.id
                   ? 'bg-slate-900 text-white border-slate-900'
@@ -282,13 +307,24 @@ export default function CircularsView({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search circulars (e.g., ground beef, eggs, honeycrisp, organic)..."
-              className="w-full pl-10 pr-9 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
+              onKeyDown={(e) => {
+                // Snap viewport back (zoom out) on Enter
+                if (e.key === 'Enter') {
+                  e.currentTarget.blur();
+                  window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+                }
+              }}
+              placeholder="Search deals (e.g. eggs, milk)..."
+              className="w-full pl-10 pr-10 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-base sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
             />
             {searchQuery && (
               <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                onClick={() => {
+                  setSearchQuery('');
+                  window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+                }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full"
+                aria-label="Clear search"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -384,7 +420,7 @@ export default function CircularsView({
       </div>
 
       {displayedDeals.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
+        <div id="deals-container" className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
           <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400 mb-3">
             <Search className="w-6 h-6" />
           </div>
@@ -405,7 +441,7 @@ export default function CircularsView({
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6 pb-20">
+        <div id="deals-container" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6 pb-20">
           {displayedDeals.map((deal, dIdx) => {
             const stats = groupStats[deal.genericProductGroup];
             const isLowestInGroup = stats ? deal.normalizedUnitCost <= stats.minUnitCost : false;

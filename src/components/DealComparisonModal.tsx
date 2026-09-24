@@ -194,7 +194,8 @@ export default function DealComparisonModal({
 
             <div className="space-y-3">
               {group.deals.map((deal, idx) => {
-                const isBest = idx === 0;
+                const isUnpriced = deal.isUnpricedPromo || deal.salePrice === 0;
+                const isBest = idx === 0 && !isUnpriced;
                 const isInList = listDealIds.has(deal.id);
 
                 return (
@@ -212,6 +213,10 @@ export default function DealComparisonModal({
                           <span className="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-600 text-white uppercase tracking-wider flex items-center space-x-1">
                             <Award className="w-3 h-3" />
                             <span>#1 Lowest Cost</span>
+                          </span>
+                        ) : isUnpriced ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-black bg-amber-100 text-amber-800 uppercase tracking-wider">
+                            Promo
                           </span>
                         ) : (
                           <span className="text-[11px] font-bold text-slate-400">
@@ -253,15 +258,30 @@ export default function DealComparisonModal({
 
                     <div className="flex sm:flex-col items-baseline sm:items-end justify-between sm:justify-center border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 shrink-0">
                       <div className="text-right">
-                        <span className="text-base sm:text-lg font-black text-slate-900 font-mono">
-                          {deal.unitPrice}
-                        </span>
-                        <div className="text-xs text-slate-500 font-medium">
-                          ${deal.salePrice.toFixed(2)} package
-                          {deal.originalPrice > deal.salePrice && (
-                            <span className="line-through text-slate-400 ml-1">
-                              ${deal.originalPrice.toFixed(2)}
+                        {isUnpriced ? (
+                          <span className="text-base sm:text-lg font-bold text-slate-700">
+                            Varies in-store
+                          </span>
+                        ) : (
+                          <span className="text-base sm:text-lg font-black text-slate-900 font-mono">
+                            ${Number(deal.normalizedUnitCost || deal.salePrice).toFixed(2)}
+                            <span className="text-xs text-slate-500 font-normal ml-1">
+                              / {deal.normalizedUnitType || 'ea'}
                             </span>
+                          </span>
+                        )}
+                        <div className="text-xs text-slate-500 font-medium">
+                          {isUnpriced ? (
+                            <span>Special promotion</span>
+                          ) : (
+                            <>
+                              ${deal.salePrice.toFixed(2)} package
+                              {deal.originalPrice > deal.salePrice && (
+                                <span className="line-through text-slate-400 ml-1">
+                                  ${deal.originalPrice.toFixed(2)}
+                                </span>
+                              )}
+                            </>
                           )}
                         </div>
                       </div>

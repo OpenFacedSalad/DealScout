@@ -190,8 +190,17 @@ export function inferGenericProductGroup(title: string): string {
   if (text.includes('chicken thigh') || text.includes('chicken thighs')) {
     return 'chicken_thighs';
   }
-  if (text.includes('egg') || text.includes('eggs')) {
-    return 'large_white_eggs';
+  if (text.includes('eggo') || text.includes('waffle') || text.includes('waffles')) {
+    return 'frozen_waffles';
+  }
+  if (text.includes('eggplant')) {
+    return 'fresh_eggplant';
+  }
+  if (text.includes('egg roll') || text.includes('egg rolls')) {
+    return 'frozen_egg_rolls';
+  }
+  if (/\beggs?\b/i.test(text) || ((text.includes('egg') || text.includes('eggs')) && !text.includes('eggo') && !text.includes('waffle'))) {
+    return 'eggs_large_12ct';
   }
   if (text.includes('milk') && (text.includes('gallon') || text.includes('whole') || text.includes('2%'))) {
     return 'whole_milk_gallon';

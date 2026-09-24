@@ -22,7 +22,8 @@ export default function LocationSearch({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={placeholder}
-          className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none text-sm text-slate-800"
+          className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 outline-none text-base sm:text-sm text-slate-800"
+          style={{ fontSize: '16px' }}
         />
         {isSearching && (
           <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -38,6 +39,10 @@ export default function LocationSearch({
               <button
                 type="button"
                 onClick={() => {
+                  if (document.activeElement instanceof HTMLElement) {
+                    document.activeElement.blur();
+                  }
+                  window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
                   setQuery('');
                   onSelectLocation(parseFloat(s.lat), parseFloat(s.lon), s.display_name, s.address);
                 }}
