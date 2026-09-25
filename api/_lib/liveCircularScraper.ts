@@ -37,228 +37,93 @@ const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes cache
 export function inferCategory(title: string, brand?: string | null): DealCategory {
   const text = `${title} ${brand || ''}`.toLowerCase();
 
-  if (
-    text.includes('beef') ||
-    text.includes('steak') ||
-    text.includes('chicken') ||
-    text.includes('pork') ||
-    text.includes('bacon') ||
-    text.includes('sausage') ||
-    text.includes('shrimp') ||
-    text.includes('salmon') ||
-    text.includes('turkey') ||
-    text.includes('tilapia') ||
-    text.includes('cod') ||
-    text.includes('crab') ||
-    text.includes('meatball') ||
-    text.includes('roast') ||
-    text.includes('ribs') ||
-    text.includes('chop') ||
-    text.includes('scrapple') ||
-    text.includes('frank') ||
-    text.includes('hot dog')
-  ) {
-    return 'meat_seafood';
-  }
-
-  if (
-    text.includes('apple') ||
-    text.includes('avocado') ||
-    text.includes('grape') ||
-    text.includes('banana') ||
-    text.includes('strawberry') ||
-    text.includes('strawberries') ||
-    text.includes('berry') ||
-    text.includes('melon') ||
-    text.includes('watermelon') ||
-    text.includes('cucumber') ||
-    text.includes('tomato') ||
-    text.includes('potato') ||
-    text.includes('onion') ||
-    text.includes('squash') ||
-    text.includes('zucchini') ||
-    text.includes('salad') ||
-    text.includes('lettuce') ||
-    text.includes('spinach') ||
-    text.includes('peach') ||
-    text.includes('plum') ||
-    text.includes('lemon') ||
-    text.includes('lime') ||
-    text.includes('citrus') ||
-    text.includes('pepper') ||
-    text.includes('carrot') ||
-    text.includes('mushroom') ||
-    text.includes('broccoli')
-  ) {
-    return 'produce';
-  }
-
-  if (
-    text.includes('milk') ||
-    text.includes('cheese') ||
-    text.includes('cheddar') ||
-    text.includes('yogurt') ||
-    text.includes('egg') ||
-    text.includes('eggs') ||
-    text.includes('butter') ||
-    text.includes('creamer') ||
-    text.includes('cream') ||
-    text.includes('ricotta') ||
-    text.includes('parmesan') ||
-    text.includes('paneer')
-  ) {
-    return 'dairy_eggs';
-  }
-
-  if (
-    text.includes('bread') ||
-    text.includes('bagel') ||
-    text.includes('bun') ||
-    text.includes('buns') ||
-    text.includes('croissant') ||
-    text.includes('muffin') ||
-    text.includes('cake') ||
-    text.includes('pie') ||
-    text.includes('deli') ||
-    text.includes('ham') ||
-    text.includes('turkey breast') ||
-    text.includes('sub') ||
-    text.includes('sandwich')
-  ) {
-    return 'bakery_deli';
-  }
-
-  if (
-    text.includes('ice cream') ||
-    text.includes('frozen') ||
-    text.includes('pizza') ||
-    text.includes('waffle') ||
-    text.includes('tater') ||
-    text.includes('nugget') ||
-    text.includes('popsicle') ||
-    text.includes('gelato')
-  ) {
-    return 'frozen';
-  }
-
-  if (
-    text.includes('soda') ||
-    text.includes('coke') ||
-    text.includes('pepsi') ||
-    text.includes('juice') ||
-    text.includes('coffee') ||
-    text.includes('tea') ||
-    text.includes('water') ||
-    text.includes('drink') ||
-    text.includes('beverage')
-  ) {
-    return 'beverages';
-  }
-
-  if (
-    text.includes('detergent') ||
-    text.includes('towel') ||
-    text.includes('bath tissue') ||
-    text.includes('paper towel') ||
-    text.includes('cleaner') ||
-    text.includes('soap') ||
-    text.includes('shampoo') ||
-    text.includes('bleach') ||
-    text.includes('foil') ||
-    text.includes('bag') ||
-    text.includes('eraser')
-  ) {
+  // 1. NON-GROCERY & HOUSEHOLD (Catch cosmetics & paper goods first)
+  if (/\b(detergent|towel|bath tissue|paper towel|cleaner|soap|shampoo|bleach|foil|bag|eraser|lip|balm|lotion)\b/.test(text)) {
     return 'household';
   }
 
-  return 'pantry_snacks';
+  // 2. BEVERAGES (Overrides produce flavors like "strawberry soda" or "iced coffee")
+  if (/\b(soda|coke|pepsi|juice|coffee|tea|water|drink|beverage|kombucha|seltzer|olipop)\b/.test(text)) {
+    return 'beverages';
+  }
+
+  // 3. FROZEN (Overrides fresh meat/produce like "strawberry strudel", "breakfast sandwich", "chicken nuggets")
+  if (/\b(ice cream|frozen|pizza|waffle|eggo|tater|nugget|popsicle|gelato|strudel|pastry|sandwich|bowl|roll)\b/.test(text)) {
+    return 'frozen';
+  }
+
+  // 4. PANTRY/SNACKS (Overrides fresh meat/produce like "steak sauce", "peanut butter", "strawberry bar")
+  if (/\b(sauce|marinade|dressing|bar|cereal|chip|snack|cookie|cracker|peanut butter|almond butter|jelly|jam|oil|pasta|rice|side)\b/.test(text)) {
+    return 'pantry_snacks';
+  }
+
+  // 5. BAKERY / DELI
+  if (/\b(bread|bagel|bun|buns|croissant|muffin|cake|pie|deli|ham|turkey breast|sub)\b/.test(text)) {
+    return 'bakery_deli';
+  }
+
+  // 6. DAIRY & EGGS (Must explicitly exclude "butternut" and "peanut")
+  if (/\b(milk|cheese|cheddar|yogurt|egg|eggs|butter|creamer|cream|ricotta|parmesan|paneer)\b/.test(text) && !/\b(butternut|peanut|almond|apple butter)\b/.test(text)) {
+    return 'dairy_eggs';
+  }
+
+  // 7. MEAT & SEAFOOD
+  if (/\b(beef|steak|chicken|pork|bacon|sausage|shrimp|salmon|turkey|tilapia|cod|crab|meatball|roast|ribs|chop|scrapple|frank|hot dog)\b/.test(text)) {
+    return 'meat_seafood';
+  }
+
+  // 8. PRODUCE
+  if (/\b(apple|avocado|grape|banana|strawberry|strawberries|berry|melon|watermelon|cucumber|tomato|potato|onion|squash|zucchini|salad|lettuce|spinach|peach|plum|lemon|lime|citrus|pepper|carrot|mushroom|broccoli|eggplant)\b/.test(text)) {
+    return 'produce';
+  }
+
+  return 'pantry_snacks'; // Safe fallback
 }
 
-// Map generic product groups for cross-store price matching
-export function inferGenericProductGroup(title: string): string {
-  const text = title.toLowerCase();
+// Map generic product groups for cross-store price matching (Two-Tier Engine)
+export function inferGenericProductGroup(title: string, brand?: string | null): string {
+  const text = `${title} ${brand || ''}`.toLowerCase();
+  
+  // Use strict regex boundary for organic to prevent failure
+  const isOrg = /\borganic\b/.test(text) ? 'organic_' : '';
 
-  if (text.includes('ground beef') || text.includes('beef chuck') || text.includes('ground chuck') || text.includes('80/20') || text.includes('73/27')) {
-    return 'ground_beef_80_20';
-  }
-  if (text.includes('chicken breast') || text.includes('chicken breasts') || text.includes('boneless skinless chicken')) {
-    return 'boneless_chicken_breast';
-  }
-  if (text.includes('chicken wing') || text.includes('wings') || text.includes('wingettes')) {
-    return 'chicken_wings';
-  }
-  if (text.includes('chicken thigh') || text.includes('chicken thighs')) {
-    return 'chicken_thighs';
-  }
-  if (text.includes('eggo') || text.includes('waffle') || text.includes('waffles')) {
-    return 'frozen_waffles';
-  }
-  if (text.includes('eggplant')) {
-    return 'fresh_eggplant';
-  }
-  if (text.includes('egg roll') || text.includes('egg rolls')) {
-    return 'frozen_egg_rolls';
-  }
-  if (/\beggs?\b/i.test(text) || ((text.includes('egg') || text.includes('eggs')) && !text.includes('eggo') && !text.includes('waffle'))) {
-    return 'eggs_large_12ct';
-  }
-  if (text.includes('milk') && (text.includes('gallon') || text.includes('whole') || text.includes('2%'))) {
-    return 'whole_milk_gallon';
-  }
-  if (text.includes('honeycrisp') || (text.includes('apple') && !text.includes('cider') && !text.includes('sauce'))) {
-    return 'honeycrisp_apples';
-  }
-  if (text.includes('avocado') || text.includes('avocados')) {
-    return 'hass_avocados';
-  }
-  if (text.includes('strawberr') || text.includes('strawberries')) {
-    return 'strawberries_1lb';
-  }
-  if (text.includes('bread') || text.includes('sourdough') || text.includes('white bread')) {
-    return 'sourdough_bread';
-  }
-  if (text.includes('olive oil') || text.includes('evoo')) {
-    return 'extra_virgin_olive_oil';
-  }
-  if (text.includes('cheddar') || text.includes('shredded cheese')) {
-    return 'shredded_cheddar_cheese';
-  }
-  if (text.includes('bacon')) {
-    return 'bacon_16oz';
-  }
-  if (text.includes('pasta sauce') || text.includes('marinara') || text.includes('spaghetti sauce') || text.includes('classico')) {
-    return 'pasta_sauce';
-  }
-  if (text.includes('butter')) {
-    return 'butter_1lb';
-  }
-  if (text.includes('potato') || text.includes('potatoes')) {
-    return 'russet_potatoes';
-  }
-  if (text.includes('salmon')) {
-    return 'salmon_fillet';
-  }
-  if (text.includes('shrimp')) {
-    return 'shrimp';
-  }
-  if (text.includes('grape') || text.includes('grapes')) {
-    return 'grapes';
-  }
-  if (text.includes('cucumber') || text.includes('cucumbers')) {
-    return 'cucumbers';
-  }
-  if (text.includes('steak') || text.includes('ribeye') || text.includes('strip')) {
-    return 'steak_cut';
-  }
-  if (text.includes('coffee')) {
-    return 'ground_coffee';
-  }
-  if (text.includes('cereal')) {
-    return 'cereal';
-  }
+  // 1. TIER 1: COMMODITY STAPLES (Strict Exclusions to prevent false matches)
+  
+  // Meat & Poultry
+  if (/\b(ground beef|ground chuck|80\/20|73\/27)\b/.test(text)) return `${isOrg}ground_beef`;
+  if (/\b(ribeye|strip steak|sirloin|t-bone|filet mignon|ny strip)\b/.test(text) && !/\b(sauce|marinade|seasoning|steak-umm)\b/.test(text)) return `${isOrg}beef_steak`;
+  if (/\b(chicken breasts?)\b/.test(text)) return `${isOrg}chicken_breast`;
+  if (/\b(chicken wings?|wingettes)\b/.test(text)) return `${isOrg}chicken_wings`;
+  if (/\b(chicken thighs?)\b/.test(text)) return `${isOrg}chicken_thighs`;
+  if (/\b(bacon)\b/.test(text) && !/\b(bits|salad|flavor|dressing|bowl|pizza)\b/.test(text)) return `${isOrg}bacon_16oz`;
+  if (/\b(pork chops?)\b/.test(text)) return `${isOrg}pork_chops`;
+  if (/\b(salmon fillets?)\b/.test(text)) return `salmon_fillet`;
+  if (/\b(shrimp)\b/.test(text)) return `shrimp`;
 
-  // Fallback sanitized slug
-  return text.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32);
+  // Dairy & Eggs
+  if (/\b(eggs?)\b/.test(text) && !/\b(roll|rollz|sandwich|salad|bowl|plant|substitute|liquid|pizza|just egg|red baron)\b/.test(text)) return `${isOrg}eggs_large_12ct`;
+  if (/\b(milk)\b/.test(text) && /\b(gallon|whole|2%|skim)\b/.test(text) && !/\b(chocolate|almond|oat|soy)\b/.test(text)) return `${isOrg}milk_gallon`;
+  if (/\b(butter)\b/.test(text) && !/\b(croissant|croissants|peanut|almond|apple|cookie|pecan|bread|bun|buns)\b/.test(text)) return `${isOrg}butter_1lb`;
+
+  // Produce
+  if (/\b(strawberry|strawberries)\b/.test(text) && !/\b(bar|bars|yogurt|ice cream|pop|soda|water|jam|jelly|syrup|strudel|pastry|nutri-grain)\b/.test(text)) return `${isOrg}strawberries`;
+  if (/\b(avocado|avocados)\b/.test(text)) return `${isOrg}avocados`;
+  if (/\b(apples?)\b/.test(text) && !/\b(cider|juice|sauce|pie|tart|strudel|fritter)\b/.test(text)) return `${isOrg}apples`;
+  if (/\b(grape|grapes)\b/.test(text) && !/\b(jelly|jam|juice|tomato|leaves)\b/.test(text)) return `${isOrg}grapes`;
+  if (/\b(potato|potatoes)\b/.test(text) && !/\b(chip|chips|salad|frozen|mashed|fries|fry|roll|rolls|bun|buns|ore-ida|martin|smartfood)\b/.test(text)) return `${isOrg}potatoes`;
+  if (/\b(onion|onions)\b/.test(text) && !/\b(ring|rings|dip|powder|soup)\b/.test(text)) return `${isOrg}onions`;
+
+  // 2. TIER 2: BRANDED PACKAGED GOODS (Strict Fingerprinting)
+  // Strips weights/sizes (oz, lb, ct, pk) to allow cross-store matching of the same branded product
+  const cleanTitle = text
+    .replace(/\b\d+(\.\d+)?\s*(oz|lb|lbs|ct|pk|pack|g|kg|ml|l)\b/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40);
+
+  const brandSlug = brand ? brand.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 15) : 'unbranded';
+  
+  return `branded_${brandSlug}_${cleanTitle}`;
 }
 
 // Format unit price and unit cost
@@ -1106,11 +971,18 @@ export async function fetchLiveDealsForStore(store: Store, zipCode: string): Pro
     const raw = rawItems[idx];
     const cleanTitle = raw.name.replace(/\s+/g, ' ').trim();
     if (!cleanTitle || seenTitles.has(cleanTitle.toLowerCase())) continue;
+    
+    // --- NON-GROCERY SANITY FILTER ---
+    // Drops appliances, luggage, apparel, and hardware immediately
+    if (/\b(luggage|maker|machine|appliance|tv|television|vacuum|chair|table|shirt|pants|spinner|carry-on|pod compatible|headphones|earbuds)\b/i.test(cleanTitle)) {
+      continue; 
+    }
+    
     seenTitles.add(cleanTitle.toLowerCase());
 
     const priceInfo = parsePriceAndUnits(cleanTitle, raw.price, raw.description);
     const category = inferCategory(cleanTitle, raw.brand);
-    const genericProductGroup = inferGenericProductGroup(cleanTitle);
+    const genericProductGroup = inferGenericProductGroup(cleanTitle, raw.brand);
 
     deals.push({
       id: `${store.id}-live-${raw.id || idx + 1}`,
