@@ -8,7 +8,10 @@ import { DealItem } from '../types';
  * - Eliminates hallucinated MSRP strikethroughs.
  */
 export function sanitizeDealItem(deal: any): DealItem {
-  const title = String(deal.title || deal.name || '').trim();
+  // FIX: Safely strip the "Branded " artifact without mangling the rest of the title
+  let title = String(deal.title || deal.name || '').trim();
+  title = title.replace(/^Branded\s+/i, '').replace(/\s+/g, ' ');
+  
   const subtitle = String(deal.subtitle || '').trim();
   const rawBadge = String(deal.dealBadge || deal.promoBadgeText || '').trim();
   const ocr = String(deal.ocrTranscript || '').trim();

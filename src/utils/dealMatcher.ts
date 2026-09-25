@@ -2,21 +2,49 @@ import { DealItem, ComparisonGroup, ShoppingListItem, BetterAlternative } from '
 
 export function formatProductGroupName(group: string): string {
   const customLabels: Record<string, string> = {
-    ground_beef_80_20: 'Ground Beef (80/20)',
-    boneless_chicken_breast: 'Boneless Chicken Breast',
-    large_white_eggs: 'Large White Eggs (1 Dozen)',
-    eggs_large_12ct: 'Large Grade A Eggs (1 Dozen)',
-    frozen_waffles: 'Frozen Waffles',
-    fresh_eggplant: 'Fresh Eggplant',
-    frozen_egg_rolls: 'Frozen Egg Rolls',
-    whole_milk_gallon: 'Whole Milk (1 Gallon)',
-    honeycrisp_apples: 'Honeycrisp Apples',
-    hass_avocados: 'Hass Avocados',
-    strawberries_1lb: 'Fresh Strawberries (1 lb)',
-    sourdough_bread: 'Artisan Sourdough Bread',
-    extra_virgin_olive_oil: 'Extra Virgin Olive Oil',
-    shredded_cheddar_cheese: 'Shredded Cheddar Cheese',
-    bacon_16oz: 'Thick Cut Bacon (16 oz)',
+    produce_apples: 'Fresh Apples',
+    produce_bananas: 'Fresh Bananas',
+    produce_berries: 'Fresh Berries',
+    produce_grapes_conventional: 'Fresh Grapes (Conventional)',
+    produce_grapes_organic: 'Fresh Grapes (Organic)',
+    produce_potatoes: 'Fresh Potatoes',
+    produce_onions: 'Fresh Onions',
+    produce_citrus: 'Fresh Citrus',
+    produce_squash: 'Fresh Squash',
+    produce_broccoli: 'Fresh Broccoli',
+    produce_corn: 'Sweet Corn',
+    meat_chicken_breast: 'Chicken Breast',
+    meat_chicken_wings: 'Chicken Wings',
+    meat_beef_steak: 'Beef Steak',
+    meat_beef_ground: 'Ground Beef',
+    meat_pork: 'Pork & Ham',
+    meat_bacon: 'Bacon',
+    meat_seafood: 'Seafood',
+    dairy_milk_cow: 'Dairy Milk (Cow)',
+    dairy_milk_plant: 'Plant-Based Milk (Oat/Almond/Soy)',
+    dairy_butter_margarine: 'Butter & Margarine',
+    dairy_eggs: 'Eggs',
+    dairy_cheese: 'Cheese',
+    dairy_yogurt: 'Yogurt',
+    pantry_cereal: 'Breakfast Cereal',
+    pantry_coffee: 'Coffee',
+    pantry_pasta: 'Pasta',
+    pantry_sauce: 'Pasta & BBQ/Steak Sauce',
+    pantry_snacks: 'Pantry Snacks',
+    pantry_potatoes_boxed: 'Boxed & Scalloped Potatoes',
+    frozen_pizza: 'Frozen Pizza & Snacks',
+    frozen_waffles_pancakes: 'Frozen Waffles & Pancakes',
+    frozen_ice_cream: 'Ice Cream',
+    frozen_meals: 'Frozen Meals',
+    beverages_soda: 'Soda & Pop',
+    beverages_water: 'Water',
+    beverages_juice: 'Juice',
+    beverages_energy: 'Energy Drinks',
+    beverages_sports: 'Sports Drinks',
+    household_essentials: 'Household Essentials',
+    snacks_potato_chips: 'Potato Chips',
+    personal_care_toothpaste: 'Toothpaste',
+    // We intentionally leave out 'uncomparable' as it gets filtered out below
   };
 
   if (customLabels[group]) {
@@ -37,7 +65,7 @@ export function groupSimilarDeals(deals: DealItem[]): ComparisonGroup[] {
   const groupMap = new Map<string, DealItem[]>();
 
   for (const deal of deals) {
-    const key = deal.genericProductGroup || 'other';
+    const key = deal.genericProductGroup || 'uncomparable';
     if (!groupMap.has(key)) {
       groupMap.set(key, []);
     }
@@ -47,21 +75,21 @@ export function groupSimilarDeals(deals: DealItem[]): ComparisonGroup[] {
   const comparisonGroups: ComparisonGroup[] = [];
 
   groupMap.forEach((groupDeals, genericGroup) => {
-    // 1. When mapping groups, filter out unpriced items for the math check
+    // 0. STRICT FILTER: Never compare items in the generic garbage buckets
+    if (!genericGroup || genericGroup === 'uncomparable' || genericGroup === 'NEEDS_AI_SORT' || genericGroup === 'uncategorized_general') {
+      return;
+    }
+
     const comparableDeals = groupDeals.filter(
       (d) => d.salePrice > 0 && d.normalizedUnitCost > 0 && !d.isUnpricedPromo
     );
 
-    // 2. Sort only the valid, priced deals to find the true winner
     const sortedDeals = [...comparableDeals].sort(
       (a, b) => a.normalizedUnitCost - b.normalizedUnitCost
     );
 
     const bestDeal = sortedDeals[0];
-    // 3. If there are no valid priced deals in the group, skip from comparison groups
-    if (!bestDeal) {
-      return;
-    }
+    if (!bestDeal) return;
 
     const unpricedDeals = groupDeals.filter(
       (d) => d.salePrice === 0 || d.isUnpricedPromo
@@ -91,11 +119,7 @@ export function groupSimilarDeals(deals: DealItem[]): ComparisonGroup[] {
   return comparisonGroups.sort((a, b) => {
     if (a.totalStores > 1 && b.totalStores <= 1) return -1;
     if (b.totalStores > 1 && a.totalStores <= 1) return 1;
-
-    if (b.totalStores !== a.totalStores) {
-      return b.totalStores - a.totalStores;
-    }
-
+    if (b.totalStores !== a.totalStores) return b.totalStores - a.totalStores;
     return b.maxSavingsPercent - a.maxSavingsPercent;
   });
 }

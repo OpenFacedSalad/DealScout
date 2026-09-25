@@ -37,6 +37,56 @@ export interface AIComparisonResult {
   caveats: string;
 }
 
+const STRICT_COMMODITY_KEYS = [
+  "produce_apples", "produce_bananas", "produce_berries", "produce_grapes_conventional", "produce_grapes_organic", "produce_potatoes", "produce_onions", "produce_citrus", "produce_squash", "produce_broccoli", "produce_corn",
+  "meat_chicken_breast", "meat_chicken_wings", "meat_beef_steak", "meat_beef_ground", "meat_pork", "meat_bacon", "meat_seafood",
+  "dairy_milk_cow", "dairy_milk_plant", "dairy_butter_margarine", "dairy_eggs", "dairy_cheese", "dairy_yogurt",
+  "pantry_cereal", "pantry_coffee", "pantry_pasta", "pantry_sauce", "pantry_snacks", "pantry_potatoes_boxed",
+  "frozen_pizza", "frozen_waffles_pancakes", "frozen_ice_cream", "frozen_meals",
+  "beverages_soda", "beverages_water", "beverages_juice", "beverages_energy", "beverages_sports",
+  "household_essentials",
+  "snacks_potato_chips",
+  "personal_care_toothpaste",
+  "uncomparable"
+];
+
+const NOUN_TO_COMMODITY_MAP: Record<string, string> = {
+  // Produce
+  "apple": "produce_apples",
+  "banana": "produce_bananas",
+  "broccoli": "produce_broccoli",
+  "corn": "produce_corn",
+  "potato": "produce_potatoes",
+  // Meat & Seafood
+  "chicken breast": "meat_chicken_breast",
+  "beef steak": "meat_beef_steak",
+  "ground beef": "meat_beef_ground",
+  "pork": "meat_pork",
+  "ham": "meat_pork",
+  "bacon": "meat_bacon",
+  "seafood": "meat_seafood",
+  "fish": "meat_seafood",
+  // Dairy
+  "eggs": "dairy_eggs",
+  "cheese": "dairy_cheese",
+  "milk": "dairy_milk_cow",
+  "plant milk": "dairy_milk_plant",
+  "butter": "dairy_butter_margarine",
+  // Pantry & Frozen
+  "cereal": "pantry_cereal",
+  "coffee": "pantry_coffee",
+  "pasta": "pantry_pasta",
+  "condiment sauce": "pantry_sauce",
+  "potato chips": "snacks_potato_chips",
+  "pizza": "frozen_pizza",
+  "ice cream": "frozen_ice_cream",
+  // Beverages
+  "sports drink": "beverages_sports",
+  "energy drink": "beverages_energy",
+  "soda": "beverages_soda",
+  "water": "beverages_water"
+};
+
 export const dealsResponseSchema: Schema = {
   type: Type.ARRAY,
   description: 'List of weekly circular flyer grocery deals for local stores.',
@@ -107,7 +157,11 @@ export const dealsResponseSchema: Schema = {
       dealBadge: { type: Type.STRING },
       validUntil: { type: Type.STRING },
       inStock: { type: Type.BOOLEAN },
-      genericProductGroup: { type: Type.STRING },
+      genericProductGroup: {
+        type: Type.STRING,
+        enum: STRICT_COMMODITY_KEYS,
+        description: 'MUST be exactly one of the allowed commodity enum keys.',
+      },
       tags: {
         type: Type.ARRAY,
         items: { type: Type.STRING },
@@ -379,9 +433,9 @@ export function sanitizeAndValidateDeals(rawDeals: DealItem[]): DealItem[] {
         deal.discountPercent = 0;
       }
 
-      const rawTitle = (deal.title || '').toLowerCase();
-      if (!deal.genericProductGroup) {
-        deal.genericProductGroup = `${deal.category || 'grocery'}_${rawTitle.replace(/[^a-z0-9]/g, '_').substring(0, 15)}_default`;
+      // MARKER: If it comes from a scraper without a group, give it a flag so we can batch-categorize it later
+      if (!deal.genericProductGroup || !STRICT_COMMODITY_KEYS.includes(deal.genericProductGroup)) {
+        deal.genericProductGroup = `NEEDS_AI_SORT`;
       }
 
       // Inject AI Chain of Thought into the subtitle for visual debugging
@@ -780,16 +834,7 @@ CRITICAL INSTRUCTIONS:
    - Example: "Butternut Squash" -> flavorOrBrand: "Butternut", coreBaseNoun: "Squash". Maps to "produce_squash".
 
    Map to EXACTLY ONE string from this Allowed Product Keys array:
-   [
-     "produce_apple", "produce_banana", "produce_berries", "produce_grapes", "produce_citrus", "produce_potato", "produce_onion", "produce_squash", "produce_other",
-     "meat_chicken_breast", "meat_chicken_other", "meat_beef_steak", "meat_beef_ground", "meat_pork", "meat_bacon", "meat_seafood_shrimp", "meat_seafood_fish",
-     "dairy_milk", "dairy_butter", "dairy_margarine", "dairy_eggs", "dairy_cheese_shredded", "dairy_cheese_block", "dairy_yogurt",
-     "pantry_cereal", "pantry_coffee", "pantry_pasta", "pantry_sauce", "pantry_snacks",
-     "frozen_pizza", "frozen_waffles_pancakes", "frozen_ice_cream", "frozen_pastry", "frozen_meals",
-     "beverages_soda", "beverages_water", "beverages_juice",
-     "household_paper", "household_cleaning",
-     "uncategorized_general"
-   ]
+   ${JSON.stringify(STRICT_COMMODITY_KEYS, null, 2)}
 3. Math & Normalization: You must populate "normalizedUnitType" with EXACTLY one of these values: "lb", "oz", "dozen", "pkg", or "each".
 4. Calculate "normalizedUnitCost" as a number based on that unit.
 5. For multi-buys ("2 for $5"): bundleQuantity: 2, bundleTotalPrice: 5.00, salePrice: 2.50, dealType: "multi_buy".
@@ -921,6 +966,75 @@ Return ONLY a valid JSON array of deal objects matching DealItem schema.
     } catch (ocrErr) {
       console.warn('[GeminiService] enrichDealsWithOCR skipped due to error:', ocrErr);
     }
+  }
+
+  // === THE BATCH INTERCEPTION FIX ===
+  const aiClientForBatch = getAiClient();
+  const uncategorizedDeals = sanitizedCombinedDeals.filter(d => d.genericProductGroup === 'NEEDS_AI_SORT');
+  
+  if (aiClientForBatch && uncategorizedDeals.length > 0) {
+    try {
+      // Send all items (they are chunked internally now)
+      const batchItems = uncategorizedDeals.map(d => ({ id: d.id, title: d.title, brand: d.brand }));
+      const categorized = await batchCategorizeItems(batchItems);
+      const catMap = new Map(categorized.map(c => [c.id, c.genericProductGroup]));
+      const nounMap = new Map(categorized.map(c => [c.id, c.base_noun || 'unknown']));
+      
+      sanitizedCombinedDeals.forEach((d, i) => {
+        if (d.genericProductGroup === 'NEEDS_AI_SORT') {
+          const extractedNoun = nounMap.get(d.id) || categorized[i]?.base_noun?.toLowerCase() || 'unknown';
+          const mappedCategory = catMap.get(d.id) || NOUN_TO_COMMODITY_MAP[extractedNoun];
+
+          if (mappedCategory) {
+            d.genericProductGroup = mappedCategory;
+          } else {
+            d.genericProductGroup = 'uncomparable';
+          }
+
+          d.subtitle = `Noun: [${extractedNoun}] -> Key: [${d.genericProductGroup}]`;
+        }
+      });
+      finalDeals.forEach((d, i) => {
+        if (d.genericProductGroup === 'NEEDS_AI_SORT') {
+          const extractedNoun = nounMap.get(d.id) || categorized[i]?.base_noun?.toLowerCase() || 'unknown';
+          const mappedCategory = catMap.get(d.id) || NOUN_TO_COMMODITY_MAP[extractedNoun];
+
+          if (mappedCategory) {
+            d.genericProductGroup = mappedCategory;
+          } else {
+            d.genericProductGroup = 'uncomparable';
+          }
+
+          d.subtitle = `Noun: [${extractedNoun}] -> Key: [${d.genericProductGroup}]`;
+        }
+      });
+    } catch(err) {
+      sanitizedCombinedDeals.forEach(d => {
+        if (d.genericProductGroup === 'NEEDS_AI_SORT') {
+          d.genericProductGroup = 'uncomparable';
+          d.subtitle = `Noun: [unknown] -> Key: [uncomparable]`;
+        }
+      });
+      finalDeals.forEach(d => {
+        if (d.genericProductGroup === 'NEEDS_AI_SORT') {
+          d.genericProductGroup = 'uncomparable';
+          d.subtitle = `Noun: [unknown] -> Key: [uncomparable]`;
+        }
+      });
+    }
+  } else {
+    sanitizedCombinedDeals.forEach(d => {
+      if (d.genericProductGroup === 'NEEDS_AI_SORT') {
+        d.genericProductGroup = 'uncomparable';
+        d.subtitle = `Noun: [unknown] -> Key: [uncomparable]`;
+      }
+    });
+    finalDeals.forEach(d => {
+      if (d.genericProductGroup === 'NEEDS_AI_SORT') {
+        d.genericProductGroup = 'uncomparable';
+        d.subtitle = `Noun: [unknown] -> Key: [uncomparable]`;
+      }
+    });
   }
 
   // Update store deal counters with final counts
@@ -1238,92 +1352,286 @@ Respond ONLY with JSON:
 
 const categoryBatchSchema: Schema = {
   type: Type.ARRAY,
-  description: 'Array of categorized grocery items.',
+  description: 'Array of grocery items with extracted core base noun.',
   items: {
     type: Type.OBJECT,
     properties: {
       id: { type: Type.STRING },
-      category: { 
+      base_noun: { 
         type: Type.STRING,
-        description: 'MUST be exactly one of the Tier 1 keys, or "TIER_2".'
+        description: 'The singular core physical item (head noun) in lowercase.'
       }
     },
-    required: ['id', 'category']
+    required: ['base_noun']
   }
 };
 
-const modelCooldowns = new Map<string, number>();
 let globalBatchAiCooldownUntil = 0;
+
+export function classifyItemDeterministically(
+  title: string,
+  brand?: string | null,
+  description?: string | null
+): string {
+  const text = `${title || ''} ${brand || ''} ${description || ''}`.toLowerCase();
+
+  // 1. Toothpaste / Oral Care (Catch before household)
+  if (/\b(toothpaste|tooth paste|sensodyne|colgate|crest|aquafresh)\b/.test(text)) {
+    return 'personal_care_toothpaste';
+  }
+
+  // 2. Potato distinctions: Chips vs Boxed/Instant vs Fresh Produce
+  if (/\b(potato chip|potato chips|kettle cooked|kettle chip|lays|lay's|ruffles|pringles|doritos|tortilla chip|tostitos|cheetos)\b/.test(text)) {
+    return 'snacks_potato_chips';
+  }
+  if (/\b(scalloped potato|boxed potato|instant mashed|mashed potato|idahoan|au gratin)\b/.test(text)) {
+    return 'pantry_potatoes_boxed';
+  }
+  if (/\b(russet|yukon gold|red potato|sweet potato|sweet potatoes|yams|baking potato|potatoes|potato)\b/.test(text) && !text.includes('chip') && !text.includes('soup') && !text.includes('salad')) {
+    return 'produce_potatoes';
+  }
+
+  // 3. Grape distinctions: Organic vs Conventional
+  if (/\bgrapes?\b/.test(text) && !text.includes('grapefruit') && !text.includes('jelly') && !text.includes('jam') && !text.includes('juice') && !text.includes('soda')) {
+    return text.includes('organic') ? 'produce_grapes_organic' : 'produce_grapes_conventional';
+  }
+
+  // 4. Milk distinctions: Plant-Based vs Cow Dairy
+  if (/\b(oat milk|oatmilk|almond milk|almondmilk|soy milk|soymilk|coconut milk|plant based milk|silk)\b/.test(text)) {
+    return 'dairy_milk_plant';
+  }
+  if (/\b(milk|whole milk|skim milk|2% milk|1% milk|half and half|heavy cream|lactaid)\b/.test(text) && !/\b(chocolate milk|candy|bar|soap|body wash)\b/.test(text)) {
+    return 'dairy_milk_cow';
+  }
+
+  // 5. Sauces (Handle Steak Sauce, BBQ Sauce before meat/steak checks!)
+  if (/\b(steak sauce|bbq sauce|barbecue sauce|pasta sauce|marinara|spaghetti sauce|ragu|prego|rao's|alfredo|a\.?1\.? sauce)\b/.test(text)) {
+    return 'pantry_sauce';
+  }
+
+  // 6. Ham Steak and Pork cuts (Disambiguate BEFORE beef steak!)
+  if (/\b(ham steak|ham steaks|pork roast|pork chops?|pork loin|pork tenderloin|pork ribs?|baby back ribs?|spareribs?|ham|pork|scrapple)\b/.test(text)) {
+    return 'meat_pork';
+  }
+
+  // 7. Beef Steak & Ground Beef
+  if (/\b(ground beef|ground chuck|ground round|ground sirloin|80\/20|85\/15|90\/10|93\/7|hamburger meat)\b/.test(text)) {
+    return 'meat_beef_ground';
+  }
+  if (/\b(steaks?|ribeye|sirloin|strip steak|t-bone|filet mignon|flank steak|chuck roast|pot roast|beef roast|brisket)\b/.test(text) && !/\b(sauce|marinade|ham)\b/.test(text)) {
+    return 'meat_beef_steak';
+  }
+
+  // 8. Chicken Cuts (Wings vs Breast)
+  if (/\b(chicken wings?|buffalo wings?|party wings?|wingettes?)\b/.test(text)) {
+    return 'meat_chicken_wings';
+  }
+  if (/\b(chicken breast|chicken breasts|boneless breast|chicken tenderloin|chicken tenders)\b/.test(text)) {
+    return 'meat_chicken_breast';
+  }
+
+  // 9. Bacon & Seafood
+  if (/\b(bacon)\b/.test(text) && !text.includes('bits') && !text.includes('sauce')) {
+    return 'meat_bacon';
+  }
+  if (/\b(shrimp|salmon|tilapia|cod|crab|lobster|tuna|scallops?|catfish|flounder|halibut|fish fillets?)\b/.test(text)) {
+    return 'meat_seafood';
+  }
+
+  // 10. Fresh Produce (with strict packaged disambiguation)
+  if (/\b(broccoli rice|cheddar broccoli|broccoli soup|broccoli cheddar)\b/.test(text)) {
+    return 'uncomparable';
+  }
+  if (/\b(broccoli crowns?|fresh broccoli|broccoli florets?|broccoli bunches?)\b/.test(text) || (/\bbroccoli\b/.test(text) && !/\b(rice|soup|cheddar|pasta|frozen|blend)\b/.test(text))) {
+    return 'produce_broccoli';
+  }
+  if (/\b(sweet corn|corn on the cob|fresh corn|ears of corn)\b/.test(text) && !/\b(chips?|flakes?|bread|canned|muffin|syrup|oil)\b/.test(text)) {
+    return 'produce_corn';
+  }
+  if (/\b(apples?|honeycrisp|gala|fuji|granny smith|pink lady|mcintosh)\b/.test(text) && !/\b(sauce|juice|pie|cider|crisp|bar)\b/.test(text)) {
+    return 'produce_apples';
+  }
+  if (/\b(bananas?|plantains?)\b/.test(text) && !/\b(bread|pudding|chips?|baby food)\b/.test(text)) {
+    return 'produce_bananas';
+  }
+  if (/\b(strawberr|blueberr|raspberr|blackberr)\w*/.test(text) && !/\b(jam|jelly|pie|soda|pop|yogurt|cereal|bar|ice cream)\b/.test(text)) {
+    return 'produce_berries';
+  }
+  if (/\b(oranges?|clementines?|mandarins?|lemons?|limes?|grapefruit)\b/.test(text) && !/\b(juice|soda|cleaner|drink|tea)\b/.test(text)) {
+    return 'produce_citrus';
+  }
+  if (/\b(onions?|scallions?|shallots?)\b/.test(text) && !/\b(dip|rings|powder|soup)\b/.test(text)) {
+    return 'produce_onions';
+  }
+  if (/\b(butternut|acorn squash|spaghetti squash|zucchini|yellow squash|squash)\b/.test(text) && !/\b(soup|pasta)\b/.test(text)) {
+    return 'produce_squash';
+  }
+
+  // 11. Dairy, Eggs & Butter
+  if (/\b(eggs?|large white eggs|grade a eggs|dozen eggs)\b/.test(text) && !/\b(eggo|egg rolls?|easter|substitute|noodle)\b/.test(text)) {
+    return 'dairy_eggs';
+  }
+  if (/\b(butter|margarine|land o lakes|country crock)\b/.test(text) && !/\b(peanut butter|almond butter|apple butter|butter cookies)\b/.test(text)) {
+    return 'dairy_butter_margarine';
+  }
+  if (/\b(cheese|cheddar|mozzarella|parmesan|swiss|provolone|gouda|brie|ricotta|shredded cheese|cheese slices)\b/.test(text) && !/\b(cake|crackers?|pizza|macaroni|burger)\b/.test(text)) {
+    return 'dairy_cheese';
+  }
+  if (/\b(yogurt|greek yogurt|chobani|dannon|oikos|yoplait)\b/.test(text)) {
+    return 'dairy_yogurt';
+  }
+
+  // 12. Frozen
+  if (/\b(pizzas?|pizza rolls|totino|digiorno|red baron|tombstone|freschetta)\b/.test(text)) {
+    return 'frozen_pizza';
+  }
+  if (/\b(waffles?|pancakes?|eggo|flapjack)\b/.test(text)) {
+    return 'frozen_waffles_pancakes';
+  }
+  if (/\b(ice cream|gelato|sorbet|popsicles?|ben & jerry|haagen-dazs|breyers|talenti)\b/.test(text)) {
+    return 'frozen_ice_cream';
+  }
+  if (/\b(frozen dinner|frozen meal|lean cuisine|stouffer|marie callender|banquet|hot pockets?|pot pie)\b/.test(text)) {
+    return 'frozen_meals';
+  }
+
+  // 13. Beverages (Sports & Energy vs Soda/Water/Juice)
+  if (/\b(gatorade|powerade|bodyarmor|body armor|electrolyte drink|sports drink)\b/.test(text)) {
+    return 'beverages_sports';
+  }
+  if (/\b(rockstar|starbucks energy|red bull|monster energy|celsius|energy drink|reign)\b/.test(text)) {
+    return 'beverages_energy';
+  }
+  if (/\b(sodas?|coke|coca-cola|pepsi|dr pepper|sprite|mountain dew|ginger ale|root beer|pop|cola)\b/.test(text)) {
+    return 'beverages_soda';
+  }
+  if (/\b(water|spring water|purified water|sparkling water|seltzer|lacroix|polar seltzer|dasani|aquafina)\b/.test(text) && !text.includes('watermelon')) {
+    return 'beverages_water';
+  }
+  if (/\b(juices?|lemonade|orange juice|apple juice|cranberry juice|tropicana|minute maid|simply orange)\b/.test(text)) {
+    return 'beverages_juice';
+  }
+
+  // 14. Pantry & Grocery
+  if (/\b(cereal|cheerios|frosted flakes|oatmeal|oats|granola|special k)\b/.test(text) && !/\b(bar|bars)\b/.test(text)) {
+    return 'pantry_cereal';
+  }
+  if (/\b(coffee|k-cup|k-cups|coffee pods|starbucks|folgers|dunkin|ground coffee|espresso)\b/.test(text)) {
+    return 'pantry_coffee';
+  }
+  if (/\b(pasta|spaghetti|penne|rotini|macaroni|noodles|barilla)\b/.test(text) && !/\b(salad|sauce)\b/.test(text)) {
+    return 'pantry_pasta';
+  }
+  if (/\b(cookies?|crackers?|pretzels?|popcorn|granola bar|snack bars?|peanuts?|almonds?|cashews?|trail mix|cheez-it|oreo)\b/.test(text)) {
+    return 'pantry_snacks';
+  }
+
+  // 15. Household Essentials
+  if (/\b(paper towels?|bath tissue|toilet paper|detergent|tide|bounty|charmin|bleach|trash bags?|dish soap|lysol|disinfecting wipes?)\b/.test(text)) {
+    return 'household_essentials';
+  }
+
+  return 'uncomparable';
+}
 
 export async function batchCategorizeItems(
   items: { id: string; title: string; brand?: string | null }[]
-): Promise<{ id: string; category: string }[]> {
+): Promise<{ id: string; genericProductGroup: string; base_noun?: string; category?: string }[]> {
   const ai = getAiClient();
-  if (!ai || items.length === 0) return items.map(i => ({ id: i.id, category: 'TIER_2' }));
+  if (!ai || items.length === 0) return [];
 
-  if (Date.now() < globalBatchAiCooldownUntil) {
-    return items.map(i => ({ id: i.id, category: 'TIER_2' }));
-  }
+  const promptTemplate = `
+You are a strict linguistic extractor. Your ONLY job is to identify the singular core physical item (the head noun) of each grocery product.
+Strip away all brand names, adjectives, flavors, packaging, and promotional modifiers. 
 
-  const prompt = `
-You are a strict grocery classification engine.
-Your task is to map an array of grocery items to their corresponding category.
+EXAMPLES:
+"Knorr Cheddar Broccoli Rice" -> "rice"
+"Hatfield Bone In Pork Sirloin Roast" -> "pork"
+"Kraft Original Flavor Mac & Cheese" -> "packaged meal"
+"Weis Quality Pickled Red Beet Eggs" -> "pickled eggs"
+"Starbucks Iced Energy & Rockstar" -> "energy drink"
+"Deutsche Küche Egg Spaetzle" -> "pasta"
+"Nutro Tuna Wet Cat Food" -> "pet food"
+"85/15 Ground Beef" -> "ground beef"
+"New York Strip Steak" -> "beef steak"
+"Honeycrisp Apples" -> "apple"
+"Kaiser or Steak/Sausage Rolls" -> "bread"
+"Crystal Hot Sauce or Steak Sauce" -> "condiment sauce"
 
-TIER 1 COMMODITIES (Exact Matches Only):
-- ground_beef
-- beef_steak
-- chicken_breast
-- chicken_wings
-- chicken_thighs
-- bacon_16oz
-- pork_chops
-- salmon_fillet
-- shrimp
-- eggs_large_12ct
-- milk_gallon
-- butter_1lb
-- strawberries
-- avocados
-- apples
-- grapes
-- potatoes
-- onions
-- snacks_chips
-
-RULES:
-1. If the item is a raw, unpackaged commodity listed above (e.g., "Honeycrisp Apples", "80/20 Ground Chuck", "Large White Eggs"), return the exact Tier 1 key.
-2. If the item is PROCESSED, PACKAGED, COOKED, HEALTH/BEAUTY, or ANY BRANDED GOOD (e.g., "Potato Soup", "Chips Ahoy", "Just Egg", "Ore-Ida Fries", "Shampoo", "Caress Body Wash", "Red Baron Pizza", "Croissants"), you MUST return "TIER_2".
-3. Only return "snacks_chips" for actual potato/tortilla chips (e.g., Lay's, Doritos).
-4. Do not guess. If unsure, return "TIER_2".
-
+Output EXACTLY a JSON array of objects. Each object must have a single key "base_noun" containing the lowercase extracted noun.
 Input items:
-${JSON.stringify(items, null, 2)}
 `;
 
-  // Prefer stable high-throughput models with larger capacity for batch classification
-  const modelsToTry = ['gemini-flash-latest', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
-  let quotaHitCount = 0;
+  // Chunk items to prevent LLM JSON output truncation / schema errors
+  const chunkSize = 40;
+  const chunks = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    chunks.push(items.slice(i, i + chunkSize));
+  }
 
-  for (const model of modelsToTry) {
-    if ((modelCooldowns.get(model) || 0) > Date.now()) {
-      quotaHitCount++;
+  const allResults: { id: string; genericProductGroup: string; base_noun: string; category?: string }[] = [];
+
+  for (const chunk of chunks) {
+    if (Date.now() < globalBatchAiCooldownUntil) {
+      for (const item of chunk) {
+        const detCat = classifyItemDeterministically(item.title, item.brand);
+        allResults.push({
+          id: item.id,
+          base_noun: 'unknown',
+          genericProductGroup: detCat,
+          category: detCat,
+        });
+      }
       continue;
     }
 
     try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: [prompt],
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: categoryBatchSchema,
-          temperature: 0.0,
-        },
-      });
+      let response;
+      try {
+        response = await ai.models.generateContent({
+          model: 'gemini-1.5-flash',
+          contents: [promptTemplate + JSON.stringify(chunk, null, 2)],
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: categoryBatchSchema,
+            temperature: 0.0,
+          },
+        });
+      } catch {
+        response = await ai.models.generateContent({
+          model: 'gemini-flash-latest',
+          contents: [promptTemplate + JSON.stringify(chunk, null, 2)],
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: categoryBatchSchema,
+            temperature: 0.0,
+          },
+        });
+      }
 
       const parsed = JSON.parse(response.text || '[]');
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+      if (Array.isArray(parsed)) {
+        chunk.forEach((item, idx) => {
+          const p = parsed[idx] || parsed.find((x: any) => x.id === item.id);
+          const extractedNoun = (p?.base_noun || '').toLowerCase().trim() || 'unknown';
+          const mappedCategory = NOUN_TO_COMMODITY_MAP[extractedNoun] || 'uncomparable';
+          allResults.push({
+            id: item.id,
+            base_noun: extractedNoun,
+            genericProductGroup: mappedCategory,
+            category: mappedCategory,
+          });
+        });
+      } else {
+        chunk.forEach((item) => {
+          const detCat = classifyItemDeterministically(item.title, item.brand);
+          allResults.push({
+            id: item.id,
+            base_noun: 'unknown',
+            genericProductGroup: detCat,
+            category: detCat,
+          });
+        });
       }
     } catch (err: any) {
       const errMsg = err?.message || String(err);
@@ -1335,37 +1643,25 @@ ${JSON.stringify(items, null, 2)}
         errMsg.includes('Quota exceeded') ||
         errMsg.includes('RESOURCE_EXHAUSTED');
 
-      const isUnavailable =
-        err?.status === 'UNAVAILABLE' ||
-        err?.code === 503 ||
-        errMsg.includes('503') ||
-        errMsg.includes('UNAVAILABLE') ||
-        errMsg.includes('high demand') ||
-        errMsg.includes('experiencing high demand');
-
       if (isQuota) {
-        quotaHitCount++;
-        let cooldownMs = 60000;
-        const retryMatch = errMsg.match(/retry in ([0-9.]+)s/i);
-        if (retryMatch && retryMatch[1]) {
-          cooldownMs = Math.ceil(parseFloat(retryMatch[1]) * 1000) + 2000;
-        }
-        modelCooldowns.set(model, Date.now() + cooldownMs);
-        console.info(`[Gemini Batch] Model ${model} quota reached; switching to fallback model.`);
-      } else if (isUnavailable) {
-        quotaHitCount++;
-        modelCooldowns.set(model, Date.now() + 30000);
-        console.info(`[Gemini Batch] Model ${model} currently experiencing high demand; switching to fallback model.`);
+        globalBatchAiCooldownUntil = Date.now() + 60000;
+        console.info('[Gemini Batch] API quota limit reached; categorized remaining items using deterministic classification.');
       } else {
-        console.info(`[Gemini Batch] Model ${model} categorization skipped; switching to fallback model.`);
+        console.info('[Gemini Batch] Chunk classification skipped:', errMsg);
       }
+
+      chunk.forEach((item) => {
+        const detCat = classifyItemDeterministically(item.title, item.brand);
+        allResults.push({
+          id: item.id,
+          base_noun: 'unknown',
+          genericProductGroup: detCat,
+          category: detCat,
+        });
+      });
     }
   }
 
-  if (quotaHitCount >= modelsToTry.length) {
-    globalBatchAiCooldownUntil = Date.now() + 30000;
-  }
-
-  return items.map(i => ({ id: i.id, category: 'TIER_2' })); // Fallback
+  return allResults;
 }
 

@@ -36,6 +36,7 @@ export default function DealComparisonView({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<'all' | DealCategory>('all');
   const [onlyMultiStore, setOnlyMultiStore] = useState(true);
+  const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [verificationDeal, setVerificationDeal] = useState<DealItem | null>(null);
 
   const handleAddToList = onAddToList || onToggleList;
@@ -154,7 +155,29 @@ export default function DealComparisonView({
         </div>
       </div>
 
-      {filteredGroups.length === 0 ? (
+      {/* Sticky Horizontal Filter Bar */}
+      <div
+        className="sticky top-0 z-20 bg-white border-b border-gray-200 py-3 px-4 flex gap-2 overflow-x-auto whitespace-nowrap shadow-sm rounded-xl"
+        style={{ WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none' }}
+      >
+        <button 
+          onClick={() => setActiveFilter(null)}
+          className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${!activeFilter ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+        >
+          All Deals
+        </button>
+        {groups.map((group) => (
+          <button
+            key={group.genericProductGroup}
+            onClick={() => setActiveFilter(activeFilter === group.genericProductGroup ? null : group.genericProductGroup)}
+            className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${activeFilter === group.genericProductGroup ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+          >
+            {group.productName}
+          </button>
+        ))}
+      </div>
+
+      {filteredGroups.filter(group => !activeFilter || group.genericProductGroup === activeFilter).length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
           <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400 mb-3">
             <Scale className="w-6 h-6" />
@@ -166,7 +189,9 @@ export default function DealComparisonView({
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {filteredGroups.map((group, gIdx) => {
+          {filteredGroups
+            .filter(group => !activeFilter || group.genericProductGroup === activeFilter)
+            .map((group, gIdx) => {
             // 1. Filter out unpriced items for the math check
             const comparableDeals = group.deals.filter(
               (d) => d.salePrice > 0 && d.normalizedUnitCost > 0 && !d.isUnpricedPromo

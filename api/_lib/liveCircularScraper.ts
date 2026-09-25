@@ -1,5 +1,5 @@
 import { Store, DealItem, DealCategory, DealType, NormalizedUnitType } from '../../src/types.js';
-import { batchCategorizeItems } from './geminiService.js';
+import { batchCategorizeItems, classifyItemDeterministically } from './geminiService.js';
 
 // Dynamic fallback date (e.g. 7 days from now) using local date to prevent UTC drift
 export const getDynamicFallbackDate = (daysAhead = 7): string => {
@@ -1014,17 +1014,23 @@ export async function fetchLiveDealsForStore(store: Store, zipCode: string): Pro
     if (categorizationCache.has(cacheKey)) {
       finalCategories.set(i, categorizationCache.get(cacheKey)!);
     } else {
-      uncachedItems.push({ 
-        id: String(raw.id || i), 
-        title: raw.name, 
-        brand: raw.brand || null, 
-        description: raw.description || null,
-        originalIndex: i 
-      });
+      const deterministicMatch = classifyItemDeterministically(raw.name, raw.brand, raw.description);
+      if (deterministicMatch && deterministicMatch !== 'uncategorized_general') {
+        categorizationCache.set(cacheKey, deterministicMatch);
+        finalCategories.set(i, deterministicMatch);
+      } else {
+        uncachedItems.push({ 
+          id: String(raw.id || i), 
+          title: raw.name, 
+          brand: raw.brand || null, 
+          description: raw.description || null,
+          originalIndex: i 
+        });
+      }
     }
   }
 
-  // 3. BATCH PROCESS UNCACHED ITEMS VIA GEMINI
+  // 3. BATCH PROCESS UNCACHED ITEMS VIA GEMINI (with safe fallback)
   if (uncachedItems.length > 0) {
     const chunkSize = 150;
     for (let i = 0; i < uncachedItems.length; i += chunkSize) {
@@ -1036,15 +1042,15 @@ export async function fetchLiveDealsForStore(store: Store, zipCode: string): Pro
         if (matchingItem) {
           const cacheKey = `${matchingItem.title}::${matchingItem.brand || ''}`.toLowerCase();
           
-          let finalCat = res.category;
+          let finalCat = res.genericProductGroup || res.category;
           
-          // Force deterministic fingerprint if AI returns TIER_2
-          if (finalCat === 'TIER_2' || !finalCat) {
+          // Force deterministic fingerprint if unclassified
+          if (!finalCat || finalCat === 'TIER_2' || finalCat === 'uncategorized_general') {
              finalCat = generateTier2Fingerprint(matchingItem.title, matchingItem.brand);
           } else {
              // WIDENED ORGANIC NET: Check title, brand, and description
              const fullTextForOrganic = `${matchingItem.title} ${matchingItem.brand || ''} ${matchingItem.description || ''}`.toLowerCase();
-             if (fullTextForOrganic.includes('organic')) {
+             if (fullTextForOrganic.includes('organic') && !finalCat.startsWith('organic_')) {
                finalCat = `organic_${finalCat}`;
              }
           }
