@@ -1,4 +1,26 @@
 import { Store, DealItem, DealCategory, DealType, NormalizedUnitType } from '../../src/types.js';
+import { batchCategorizeItems } from './geminiService.js';
+
+// Dynamic fallback date (e.g. 7 days from now) using local date to prevent UTC drift
+export const getDynamicFallbackDate = (daysAhead = 7): string => {
+  const d = new Date();
+  d.setDate(d.getDate() + daysAhead);
+  const localMonth = String(d.getMonth() + 1).padStart(2, '0');
+  const localDay = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${localMonth}-${localDay}`;
+};
+
+export const getDynamicDateRange = (daysAhead = 7): string => {
+  const now = new Date();
+  const future = new Date();
+  future.setDate(now.getDate() + daysAhead);
+  const nowMonth = now.toLocaleString('en-US', { month: 'short' });
+  const futureMonth = future.toLocaleString('en-US', { month: 'short' });
+  if (nowMonth === futureMonth) {
+    return `${nowMonth} ${now.getDate()} - ${future.getDate()}`;
+  }
+  return `${nowMonth} ${now.getDate()} - ${futureMonth} ${future.getDate()}`;
+};
 
 interface FlippFlyer {
   id: number;
@@ -32,6 +54,9 @@ interface FlippRawItem {
 const flyersCache = new Map<string, { timestamp: number; flyers: FlippRawItem[]; validDates?: string; flyerTitle?: string }>();
 const zipFlyersIndexCache = new Map<string, { timestamp: number; flyers: FlippFlyer[] }>();
 const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes cache
+
+// Runtime Cache to prevent duplicate LLM calls
+const categorizationCache = new Map<string, string>();
 
 // Map title and text to DealCategory
 export function inferCategory(title: string, brand?: string | null): DealCategory {
@@ -80,41 +105,8 @@ export function inferCategory(title: string, brand?: string | null): DealCategor
   return 'pantry_snacks'; // Safe fallback
 }
 
-// Map generic product groups for cross-store price matching (Two-Tier Engine)
-export function inferGenericProductGroup(title: string, brand?: string | null): string {
-  const text = `${title} ${brand || ''}`.toLowerCase();
-  
-  // Use strict regex boundary for organic to prevent failure
-  const isOrg = /\borganic\b/.test(text) ? 'organic_' : '';
-
-  // 1. TIER 1: COMMODITY STAPLES (Strict Exclusions to prevent false matches)
-  
-  // Meat & Poultry
-  if (/\b(ground beef|ground chuck|80\/20|73\/27)\b/.test(text)) return `${isOrg}ground_beef`;
-  if (/\b(ribeye|strip steak|sirloin|t-bone|filet mignon|ny strip)\b/.test(text) && !/\b(sauce|marinade|seasoning|steak-umm)\b/.test(text)) return `${isOrg}beef_steak`;
-  if (/\b(chicken breasts?)\b/.test(text)) return `${isOrg}chicken_breast`;
-  if (/\b(chicken wings?|wingettes)\b/.test(text)) return `${isOrg}chicken_wings`;
-  if (/\b(chicken thighs?)\b/.test(text)) return `${isOrg}chicken_thighs`;
-  if (/\b(bacon)\b/.test(text) && !/\b(bits|salad|flavor|dressing|bowl|pizza)\b/.test(text)) return `${isOrg}bacon_16oz`;
-  if (/\b(pork chops?)\b/.test(text)) return `${isOrg}pork_chops`;
-  if (/\b(salmon fillets?)\b/.test(text)) return `salmon_fillet`;
-  if (/\b(shrimp)\b/.test(text)) return `shrimp`;
-
-  // Dairy & Eggs
-  if (/\b(eggs?)\b/.test(text) && !/\b(roll|rollz|sandwich|salad|bowl|plant|substitute|liquid|pizza|just egg|red baron)\b/.test(text)) return `${isOrg}eggs_large_12ct`;
-  if (/\b(milk)\b/.test(text) && /\b(gallon|whole|2%|skim)\b/.test(text) && !/\b(chocolate|almond|oat|soy)\b/.test(text)) return `${isOrg}milk_gallon`;
-  if (/\b(butter)\b/.test(text) && !/\b(croissant|croissants|peanut|almond|apple|cookie|pecan|bread|bun|buns)\b/.test(text)) return `${isOrg}butter_1lb`;
-
-  // Produce
-  if (/\b(strawberry|strawberries)\b/.test(text) && !/\b(bar|bars|yogurt|ice cream|pop|soda|water|jam|jelly|syrup|strudel|pastry|nutri-grain)\b/.test(text)) return `${isOrg}strawberries`;
-  if (/\b(avocado|avocados)\b/.test(text)) return `${isOrg}avocados`;
-  if (/\b(apples?)\b/.test(text) && !/\b(cider|juice|sauce|pie|tart|strudel|fritter)\b/.test(text)) return `${isOrg}apples`;
-  if (/\b(grape|grapes)\b/.test(text) && !/\b(jelly|jam|juice|tomato|leaves)\b/.test(text)) return `${isOrg}grapes`;
-  if (/\b(potato|potatoes)\b/.test(text) && !/\b(chip|chips|salad|frozen|mashed|fries|fry|roll|rolls|bun|buns|ore-ida|martin|smartfood)\b/.test(text)) return `${isOrg}potatoes`;
-  if (/\b(onion|onions)\b/.test(text) && !/\b(ring|rings|dip|powder|soup)\b/.test(text)) return `${isOrg}onions`;
-
-  // 2. TIER 2: BRANDED PACKAGED GOODS (Strict Fingerprinting)
-  // Strips weights/sizes (oz, lb, ct, pk) to allow cross-store matching of the same branded product
+// Helper function to generate strict Tier 2 fingerprints
+function generateTier2Fingerprint(text: string, brand?: string | null): string {
   const cleanTitle = text
     .replace(/\b\d+(\.\d+)?\s*(oz|lb|lbs|ct|pk|pack|g|kg|ml|l)\b/g, '')
     .replace(/[^a-z0-9]+/g, '_')
@@ -122,7 +114,6 @@ export function inferGenericProductGroup(title: string, brand?: string | null): 
     .slice(0, 40);
 
   const brandSlug = brand ? brand.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 15) : 'unbranded';
-  
   return `branded_${brandSlug}_${cleanTitle}`;
 }
 
@@ -325,8 +316,8 @@ export async function getFlyerItems(flyerId: number): Promise<{ items: FlippRawI
 
 // Live specials for The Fresh Market (Weekly Features + Little Big Meal + Monthlong Specials)
 export function getLiveFreshMarketDeals(store: Store): DealItem[] {
-  const validUntil = '2026-09-22';
-  store.validDates = 'Sep 9 - Sep 22';
+  const validUntil = getDynamicFallbackDate(7);
+  store.validDates = getDynamicDateRange(7);
   store.flyerTitle = 'The Fresh Market Weekly Features & Little Big Meal';
 
   const liveFeatures = [
@@ -580,9 +571,9 @@ export function getLiveFreshMarketDeals(store: Store): DealItem[] {
 
 // Live September 2026 Fearless Flyer items & everyday low prices for Trader Joe's
 export function getLiveTraderJoesDeals(store: Store): DealItem[] {
-  const validUntil = '2026-09-30';
-  store.validDates = 'Sep 1 - Sep 30';
-  store.flyerTitle = 'Trader Joe’s Fall Fearless Flyer & Specials';
+  const validUntil = getDynamicFallbackDate(14);
+  store.validDates = getDynamicDateRange(14);
+  store.flyerTitle = 'Trader Joe’s Fearless Flyer & Specials';
 
   const tjItems = [
     {
@@ -910,8 +901,8 @@ export async function fetchLiveDealsForStore(store: Store, zipCode: string): Pro
   // 3. Query Flipp flyers for the user's postal code
   const flyers = await getLiveFlippFlyersForZip(zipCode);
 
-  // Match the flyer to this store's merchant
-  const matchingFlyer = flyers.find((f) => {
+  // 1. Find ALL active flyers for the requested store, not just the first one
+  const matchingFlyers = flyers.filter((f: any) => {
     const merchantL = (f.merchant || '').toLowerCase();
     if (storeNameL.includes('aldi') || storeChainL.includes('aldi')) {
       return merchantL.includes('aldi');
@@ -946,74 +937,157 @@ export async function fetchLiveDealsForStore(store: Store, zipCode: string): Pro
     if (storeNameL.includes('publix') || storeChainL.includes('publix')) {
       return merchantL.includes('publix');
     }
-    return merchantL.includes(storeChainL) || storeNameL.includes(merchantL);
+    return (
+      merchantL === storeNameL ||
+      merchantL.includes(storeNameL) ||
+      merchantL.includes(storeChainL) ||
+      storeNameL.includes(merchantL)
+    );
   });
 
-  if (!matchingFlyer) {
-    console.info(`[LiveCircularScraper] No Flipp flyer found for ${store.name} in ${zipCode}`);
+  if (matchingFlyers.length === 0) {
+    console.info(`[LiveCircularScraper] No Flipp flyers found for ${store.name} in ${zipCode}`);
     return [];
   }
 
-  // Update flyer title & dates on store metadata
+  // Update flyer title on store metadata
   store.flyerTitle = `${store.chain} Weekly Ad`;
-  const { items: rawItems, validDates } = await getFlyerItems(matchingFlyer.id);
-  if (validDates) {
-    store.validDates = validDates;
+
+  // 2. Loop through every active flyer (e.g., Aldi's Grocery Ad AND Aldi's Home Goods Ad)
+  type RawItemWithMeta = FlippRawItem & { flyerValidUntil?: string };
+  const combinedRawItems: RawItemWithMeta[] = [];
+
+  for (const flyer of matchingFlyers) {
+    try {
+      const { items: flyerItems, validDates } = await getFlyerItems(flyer.id);
+      if (validDates && !store.validDates) {
+        store.validDates = validDates;
+      }
+
+      // 3. Dynamic fallback using the safe date generator created in the previous patch
+      const validUntil = flyer.valid_to ? flyer.valid_to.split('T')[0] : getDynamicFallbackDate();
+      for (const item of flyerItems) {
+        combinedRawItems.push({
+          ...item,
+          flyerValidUntil: item.valid_to ? item.valid_to.split('T')[0] : validUntil,
+        });
+      }
+    } catch (err) {
+      console.error(`Failed to fetch items for flyer ${flyer.id}:`, err);
+    }
   }
 
-  const validUntil = matchingFlyer.valid_to ? matchingFlyer.valid_to.split('T')[0] : '2026-09-17';
+  if (combinedRawItems.length === 0) return [];
 
-  // Map into DealItems
-  const deals: DealItem[] = [];
+  const validRawItems: RawItemWithMeta[] = [];
   const seenTitles = new Set<string>();
 
-  for (let idx = 0; idx < rawItems.length; idx++) {
-    const raw = rawItems[idx];
-    const cleanTitle = raw.name.replace(/\s+/g, ' ').trim();
+  // 1. FILTER TRASH (Save tokens by dropping non-groceries locally)
+  for (const raw of combinedRawItems) {
+    const cleanTitle = (raw.name || '').replace(/\s+/g, ' ').trim();
+    
+    // --- DIAGNOSTIC INJECTION: RAW FLIPP DATA ---
+    const testTitle = cleanTitle.toLowerCase();
+    if (testTitle.includes('croissant') || testTitle.includes('potato') || testTitle.includes('grape') || testTitle.includes('chip')) {
+      console.log('\n[DEBUG - RAW FLIPP DATA]:', cleanTitle);
+      console.log(JSON.stringify(raw, null, 2));
+    }
+    // --------------------------------------------
+
     if (!cleanTitle || seenTitles.has(cleanTitle.toLowerCase())) continue;
     
-    // --- NON-GROCERY SANITY FILTER ---
-    // Drops appliances, luggage, apparel, and hardware immediately
-    if (/\b(luggage|maker|machine|appliance|tv|television|vacuum|chair|table|shirt|pants|spinner|carry-on|pod compatible|headphones|earbuds)\b/i.test(cleanTitle)) {
+    if (/\b(luggage|maker|machine|appliance|tv|television|vacuum|chair|table|shirt|pants|spinner|carry-on|pod compatible|headphones|earbuds|body wash|lip balm|shampoo|conditioner|lotion|cosmetics|makeup|skincare)\b/i.test(cleanTitle)) {
       continue; 
     }
-    
     seenTitles.add(cleanTitle.toLowerCase());
+    validRawItems.push(raw);
+  }
 
+  // 2. CHECK CACHE (Now includes description for wider Organic net)
+  const uncachedItems: { id: string; title: string; brand: string | null; description: string | null; originalIndex: number }[] = [];
+  const finalCategories = new Map<number, string>(); 
+
+  for (let i = 0; i < validRawItems.length; i++) {
+    const raw = validRawItems[i];
+    const cacheKey = `${raw.name}::${raw.brand || ''}`.toLowerCase();
+    
+    if (categorizationCache.has(cacheKey)) {
+      finalCategories.set(i, categorizationCache.get(cacheKey)!);
+    } else {
+      uncachedItems.push({ 
+        id: String(raw.id || i), 
+        title: raw.name, 
+        brand: raw.brand || null, 
+        description: raw.description || null,
+        originalIndex: i 
+      });
+    }
+  }
+
+  // 3. BATCH PROCESS UNCACHED ITEMS VIA GEMINI
+  if (uncachedItems.length > 0) {
+    const chunkSize = 150;
+    for (let i = 0; i < uncachedItems.length; i += chunkSize) {
+      const chunk = uncachedItems.slice(i, i + chunkSize);
+      const aiResults = await batchCategorizeItems(chunk.map(c => ({ id: c.id, title: c.title, brand: c.brand })));
+      
+      for (const res of aiResults) {
+        const matchingItem = chunk.find(c => c.id === res.id);
+        if (matchingItem) {
+          const cacheKey = `${matchingItem.title}::${matchingItem.brand || ''}`.toLowerCase();
+          
+          let finalCat = res.category;
+          
+          // Force deterministic fingerprint if AI returns TIER_2
+          if (finalCat === 'TIER_2' || !finalCat) {
+             finalCat = generateTier2Fingerprint(matchingItem.title, matchingItem.brand);
+          } else {
+             // WIDENED ORGANIC NET: Check title, brand, and description
+             const fullTextForOrganic = `${matchingItem.title} ${matchingItem.brand || ''} ${matchingItem.description || ''}`.toLowerCase();
+             if (fullTextForOrganic.includes('organic')) {
+               finalCat = `organic_${finalCat}`;
+             }
+          }
+
+          categorizationCache.set(cacheKey, finalCat);
+          finalCategories.set(matchingItem.originalIndex, finalCat);
+        }
+      }
+    }
+  }
+
+  // 4. MAP TO FINAL DEAL ITEMS
+  const allDeals: DealItem[] = [];
+  for (let i = 0; i < validRawItems.length; i++) {
+    const raw = validRawItems[i];
+    // Replaced inferGenericProductGroup with generateTier2Fingerprint
+    const genericProductGroup = finalCategories.get(i) || generateTier2Fingerprint(raw.name, raw.brand);
+    
+    const cleanTitle = raw.name.replace(/\s+/g, ' ').trim();
     const priceInfo = parsePriceAndUnits(cleanTitle, raw.price, raw.description);
     const category = inferCategory(cleanTitle, raw.brand);
-    const genericProductGroup = inferGenericProductGroup(cleanTitle, raw.brand);
 
-    deals.push({
-      id: `${store.id}-live-${raw.id || idx + 1}`,
+    allDeals.push({
+      id: `${store.id}-live-${raw.id || i + 1}`,
       storeId: store.id,
       storeName: store.name,
       storeLogoBg: store.logoBg,
       storeLogoText: store.logoText,
+      brand: raw.brand || undefined,
       title: cleanTitle,
-      subtitle: raw.description || undefined,
-      imageUrl: raw.cutout_image_url || raw.clean_image_url,
-      category,
-      originalPrice: priceInfo.originalPrice,
-      salePrice: priceInfo.salePrice,
-      discountPercent: priceInfo.discountPercent,
-      unitPrice: priceInfo.unitPrice,
-      normalizedUnitCost: priceInfo.normalizedUnitCost,
-      normalizedUnitType: priceInfo.normalizedUnitType,
-      unitDescription: priceInfo.unitDescription,
-      dealType: priceInfo.dealType,
-      dealBadge: priceInfo.dealBadge,
-      bundleQuantity: priceInfo.bundleQuantity,
-      bundleTotalPrice: priceInfo.bundleTotalPrice,
-      validUntil,
+      subtitle: raw.description?.replace(/\s+/g, ' ').trim() || undefined,
+      imageUrl: raw.clean_image_url || raw.cutout_image_url || undefined,
+      validUntil: raw.valid_to ? raw.valid_to.split('T')[0] : (raw.flyerValidUntil || getDynamicFallbackDate()),
       inStock: true,
+      category,
       genericProductGroup,
       tags: [store.chain.toLowerCase(), 'weekly_ad', category],
-      brand: raw.brand || undefined,
+      ...priceInfo,
     });
   }
 
-  store.totalDealsCount = deals.length;
-  console.info(`[LiveCircularScraper] Loaded ${deals.length} authentic live circular deals for ${store.name}`);
-  return deals;
+  store.totalDealsCount = allDeals.length;
+  console.info(`[LiveCircularScraper] Loaded ${allDeals.length} authentic live circular deals for ${store.name}`);
+  // 4. Return the combined deals from all circulars
+  return allDeals;
 }

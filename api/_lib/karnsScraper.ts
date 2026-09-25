@@ -1,5 +1,6 @@
 import { Store, DealItem, DealCategory, DealType, NormalizedUnitType } from '../../src/types.js';
 import { KARNS_FULL_CIRCULAR_SNAPSHOT, KARNS_CIRCULAR_VALID_DATES } from './karnsSnapshotData.js';
+import { getDynamicFallbackDate, getDynamicDateRange } from './liveCircularScraper.js';
 
 interface RawItem {
   rawTitle: string;
@@ -308,9 +309,13 @@ export async function fetchLiveKarnsCircular(): Promise<{ items: RawItem[]; vali
 export async function getFullKarnsCircularDeals(store: Store): Promise<DealItem[]> {
   const { items, validDates } = await fetchLiveKarnsCircular();
 
+  const rollingValidUntil = getDynamicFallbackDate(7);
+  const rollingDateRange = getDynamicDateRange(7);
+
   // Update store metadata
-  store.validDates = 'Sep 8 - Sep 14';
-  store.flyerTitle = `Karns Weekly Circular (${validDates})`;
+  const hasLiveValidDates = validDates && !validDates.includes('September 14') && !validDates.includes('2026-09-14');
+  store.validDates = hasLiveValidDates ? validDates : rollingDateRange;
+  store.flyerTitle = `Karns Weekly Circular (${store.validDates})`;
   store.totalDealsCount = items.length;
 
   return items.map((raw, idx) => ({
@@ -332,7 +337,7 @@ export async function getFullKarnsCircularDeals(store: Store): Promise<DealItem[
     unitDescription: raw.unitDescription,
     dealType: raw.dealType,
     dealBadge: raw.dealBadge,
-    validUntil: '2026-09-14',
+    validUntil: rollingValidUntil,
     inStock: true,
     genericProductGroup: raw.genericProductGroup,
     tags: raw.tags,

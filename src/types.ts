@@ -37,7 +37,7 @@ export type RadiusOption = 1 | 5 | 10 | 20 | 25 | 50 | number;
 
 export type ActiveTab = 'circulars' | 'compare' | 'list';
 
-export type SortOption = 'discount' | 'price' | 'unit_cost';
+export type SortOption = 'discount' | 'price' | 'unit_cost' | 'expiring_soonest' | 'expiring_latest';
 
 export interface Store {
   id: string;

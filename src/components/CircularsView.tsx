@@ -142,6 +142,18 @@ export default function CircularsView({
     });
 
     return result.sort((a, b) => {
+      if (sortBy === 'expiring_soonest') {
+        // Push null/missing dates to Infinity so they sit at the bottom
+        const dateA = a.validUntil ? new Date(a.validUntil).getTime() : Infinity;
+        const dateB = b.validUntil ? new Date(b.validUntil).getTime() : Infinity;
+        return dateA - dateB;
+      }
+      if (sortBy === 'expiring_latest') {
+        // Push null/missing dates to 0 so they sit at the bottom of a descending list
+        const dateA = a.validUntil ? new Date(a.validUntil).getTime() : 0;
+        const dateB = b.validUntil ? new Date(b.validUntil).getTime() : 0;
+        return dateB - dateA;
+      }
       if (sortBy === 'discount') {
         return b.discountPercent - a.discountPercent;
       }
@@ -342,6 +354,8 @@ export default function CircularsView({
               <option value="discount">Highest % Discount</option>
               <option value="unit_cost">Lowest Unit Cost</option>
               <option value="price">Lowest Package Price</option>
+              <option value="expiring_soonest">Expiring Soonest</option>
+              <option value="expiring_latest">Expiring Latest</option>
             </select>
           </div>
         </div>

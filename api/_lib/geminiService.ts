@@ -259,9 +259,23 @@ export function isValidGroceryDeal(deal: any): boolean {
  * purges unpriced banners/promotions, normalizes multi-buys, and eliminates hallucinated discounts.
  */
 export function sanitizeAndValidateDeals(rawDeals: DealItem[]): DealItem[] {
+  // 1. Get today's date strictly as YYYY-MM-DD in the local timezone to avoid UTC drift
+  const now = new Date();
+  const localMonth = String(now.getMonth() + 1).padStart(2, '0');
+  const localDay = String(now.getDate()).padStart(2, '0');
+  const todayString = `${now.getFullYear()}-${localMonth}-${localDay}`;
+
   const cleanedDeals = (rawDeals || [])
     .filter((deal: any) => {
       if (!isValidGroceryDeal(deal)) return false;
+
+      // 2. Safely compare strings (e.g. '2026-09-17' < '2026-09-25')
+      if (deal.validUntil) {
+        const dealDateString = deal.validUntil.split('T')[0]; // Ensure it is just YYYY-MM-DD
+        if (dealDateString < todayString) {
+          return false; // Safely skip genuinely expired deals
+        }
+      }
 
       const titleLower = deal.title.toLowerCase();
       const subLower = (deal.subtitle || '').toLowerCase();
@@ -1220,5 +1234,138 @@ Respond ONLY with JSON:
     unitPriceAdvantage: `${sorted[0]?.unitPrice}`,
     caveats: sorted[0]?.dealType === 'digital_coupon' ? 'Requires clipping a digital coupon in the store app.' : undefined,
   };
+}
+
+const categoryBatchSchema: Schema = {
+  type: Type.ARRAY,
+  description: 'Array of categorized grocery items.',
+  items: {
+    type: Type.OBJECT,
+    properties: {
+      id: { type: Type.STRING },
+      category: { 
+        type: Type.STRING,
+        description: 'MUST be exactly one of the Tier 1 keys, or "TIER_2".'
+      }
+    },
+    required: ['id', 'category']
+  }
+};
+
+const modelCooldowns = new Map<string, number>();
+let globalBatchAiCooldownUntil = 0;
+
+export async function batchCategorizeItems(
+  items: { id: string; title: string; brand?: string | null }[]
+): Promise<{ id: string; category: string }[]> {
+  const ai = getAiClient();
+  if (!ai || items.length === 0) return items.map(i => ({ id: i.id, category: 'TIER_2' }));
+
+  if (Date.now() < globalBatchAiCooldownUntil) {
+    return items.map(i => ({ id: i.id, category: 'TIER_2' }));
+  }
+
+  const prompt = `
+You are a strict grocery classification engine.
+Your task is to map an array of grocery items to their corresponding category.
+
+TIER 1 COMMODITIES (Exact Matches Only):
+- ground_beef
+- beef_steak
+- chicken_breast
+- chicken_wings
+- chicken_thighs
+- bacon_16oz
+- pork_chops
+- salmon_fillet
+- shrimp
+- eggs_large_12ct
+- milk_gallon
+- butter_1lb
+- strawberries
+- avocados
+- apples
+- grapes
+- potatoes
+- onions
+- snacks_chips
+
+RULES:
+1. If the item is a raw, unpackaged commodity listed above (e.g., "Honeycrisp Apples", "80/20 Ground Chuck", "Large White Eggs"), return the exact Tier 1 key.
+2. If the item is PROCESSED, PACKAGED, COOKED, HEALTH/BEAUTY, or ANY BRANDED GOOD (e.g., "Potato Soup", "Chips Ahoy", "Just Egg", "Ore-Ida Fries", "Shampoo", "Caress Body Wash", "Red Baron Pizza", "Croissants"), you MUST return "TIER_2".
+3. Only return "snacks_chips" for actual potato/tortilla chips (e.g., Lay's, Doritos).
+4. Do not guess. If unsure, return "TIER_2".
+
+Input items:
+${JSON.stringify(items, null, 2)}
+`;
+
+  // Prefer stable high-throughput models with larger capacity for batch classification
+  const modelsToTry = ['gemini-flash-latest', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+  let quotaHitCount = 0;
+
+  for (const model of modelsToTry) {
+    if ((modelCooldowns.get(model) || 0) > Date.now()) {
+      quotaHitCount++;
+      continue;
+    }
+
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: [prompt],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: categoryBatchSchema,
+          temperature: 0.0,
+        },
+      });
+
+      const parsed = JSON.parse(response.text || '[]');
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      const isQuota =
+        err?.status === 'RESOURCE_EXHAUSTED' ||
+        err?.code === 429 ||
+        errMsg.includes('429') ||
+        errMsg.includes('quota') ||
+        errMsg.includes('Quota exceeded') ||
+        errMsg.includes('RESOURCE_EXHAUSTED');
+
+      const isUnavailable =
+        err?.status === 'UNAVAILABLE' ||
+        err?.code === 503 ||
+        errMsg.includes('503') ||
+        errMsg.includes('UNAVAILABLE') ||
+        errMsg.includes('high demand') ||
+        errMsg.includes('experiencing high demand');
+
+      if (isQuota) {
+        quotaHitCount++;
+        let cooldownMs = 60000;
+        const retryMatch = errMsg.match(/retry in ([0-9.]+)s/i);
+        if (retryMatch && retryMatch[1]) {
+          cooldownMs = Math.ceil(parseFloat(retryMatch[1]) * 1000) + 2000;
+        }
+        modelCooldowns.set(model, Date.now() + cooldownMs);
+        console.info(`[Gemini Batch] Model ${model} quota reached; switching to fallback model.`);
+      } else if (isUnavailable) {
+        quotaHitCount++;
+        modelCooldowns.set(model, Date.now() + 30000);
+        console.info(`[Gemini Batch] Model ${model} currently experiencing high demand; switching to fallback model.`);
+      } else {
+        console.info(`[Gemini Batch] Model ${model} categorization skipped; switching to fallback model.`);
+      }
+    }
+  }
+
+  if (quotaHitCount >= modelsToTry.length) {
+    globalBatchAiCooldownUntil = Date.now() + 30000;
+  }
+
+  return items.map(i => ({ id: i.id, category: 'TIER_2' })); // Fallback
 }
 
