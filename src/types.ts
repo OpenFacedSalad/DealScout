@@ -84,6 +84,7 @@ export interface DealItem {
   genericProductGroup: string;
   flavorOrBrand?: string;
   coreBaseNoun?: string;
+  brandMatchKey?: string;
   tags: string[];
   brand?: string;
   qualityTier?: QualityTier;

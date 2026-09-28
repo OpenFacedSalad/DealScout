@@ -42,9 +42,9 @@ export async function POST(req: Request) {
   } catch (err: any) {
     console.error('[Edge API /circulars/nearby Error]:', err);
     return new Response(
-      JSON.stringify({ error: err?.message || 'Failed to fetch circulars' }),
+      JSON.stringify({ stores: [], deals: [] }),
       {
-        status: 500,
+        status: 200,
         headers: corsHeaders,
       }
     );

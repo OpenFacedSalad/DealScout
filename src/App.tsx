@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Store,
   DealItem,
@@ -96,6 +96,7 @@ export default function App() {
   const [isDocModalOpen, setIsDocModalOpen] = useState<boolean>(false);
   const [activeDocType, setActiveDocType] = useState<'design' | 'code' | 'devtools'>('design');
   const [selectedComparisonGroup, setSelectedComparisonGroup] = useState<ComparisonGroup | null>(null);
+  const [exportFeedback, setExportFeedback] = useState<string | null>(null);
 
   useEffect(() => {
     safeStorage.setItem(STORAGE_KEY_LOCATION, JSON.stringify(location));
@@ -122,15 +123,27 @@ export default function App() {
     }
   }, []);
 
+  const inFlightAbortRef = useRef<AbortController | null>(null);
+
   const fetchCirculars = useCallback(
     async (targetLocation: UserLocation, targetRadius: number) => {
+      // Cleanly abort any previous in-flight request
+      if (inFlightAbortRef.current) {
+        inFlightAbortRef.current.abort();
+      }
+
+      const controller = new AbortController();
+      inFlightAbortRef.current = controller;
+
       setIsLoading(true);
       setError(null);
 
-      // 1. Create an AbortController to force a timeout on the frontend
-      const controller = new AbortController();
-      // INCREASED TO 60 SECONDS to allow Gemini Vision OCR sufficient time to process
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      // 90 second timeout for cold starts with multi-store scraping & OCR
+      let timedOut = false;
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, 90000);
 
       const payload = {
         lat: targetLocation?.latitude ?? 40.2137,
@@ -176,6 +189,11 @@ export default function App() {
           data = await doFetch();
         }
 
+        // If this request was superseded while running, discard result
+        if (inFlightAbortRef.current !== controller) {
+          return;
+        }
+
         const newStores = Array.isArray(data?.stores) ? data.stores : [];
         const newDeals = Array.isArray(data?.deals) ? data.deals : [];
 
@@ -193,15 +211,34 @@ export default function App() {
           } catch {}
         }
       } catch (err: any) {
-        console.error("Fetch error:", err);
-        if (err.name === 'AbortError' || err.message?.includes('AbortError') || err.message?.includes('Timeout')) {
-          setError("Request timed out. The AI processing took longer than 60 seconds.");
-        } else {
-          setError(err?.message || "Failed to load live circulars. The AI endpoint may be timing out.");
+        // If this controller was superseded by a newer fetch or unmount, ignore quietly
+        if (inFlightAbortRef.current !== controller) {
+          return;
         }
+
+        const isAbort =
+          err?.name === 'AbortError' ||
+          err?.message?.toLowerCase().includes('abort') ||
+          err?.message?.toLowerCase().includes('timeout') ||
+          controller.signal.aborted;
+
+        if (isAbort) {
+          if (timedOut) {
+            console.warn('[App] Circular fetch timed out after 90s');
+            setError('Live circular request timed out. Please try refreshing or reducing your search radius.');
+          }
+          // Aborted by user action or superseded cleanly
+          return;
+        }
+
+        console.error('Fetch error:', err);
+        setError(err?.message || 'Failed to load live circulars. Please try again.');
       } finally {
         clearTimeout(timeoutId);
-        setIsLoading(false);
+        if (inFlightAbortRef.current === controller) {
+          inFlightAbortRef.current = null;
+          setIsLoading(false);
+        }
       }
     },
     []
@@ -209,7 +246,20 @@ export default function App() {
 
   useEffect(() => {
     fetchCirculars(location, radiusMiles);
+    return () => {
+      if (inFlightAbortRef.current) {
+        inFlightAbortRef.current.abort();
+      }
+    };
   }, [location, radiusMiles, fetchCirculars]);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    const mainContainer = document.getElementById('main-scroll-container');
+    if (mainContainer) {
+      mainContainer.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    }
+  }, [activeTab]);
 
   const handleDetectGPS = useCallback(async () => {
     try {
@@ -388,6 +438,47 @@ export default function App() {
     setIsDocModalOpen(true);
   };
 
+  const handleDownloadJson = () => {
+    try {
+      const jsonString = JSON.stringify(deals, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `dealscout_payload_${Date.now()}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setExportFeedback('Downloaded JSON file!');
+      setTimeout(() => setExportFeedback(null), 3500);
+    } catch (err) {
+      console.error('Failed to download JSON:', err);
+      setExportFeedback('Download failed. Use Copy to Clipboard instead.');
+      try {
+        alert('Download failed. Use Copy to Clipboard instead.');
+      } catch {}
+    }
+  };
+
+  const handleCopyToClipboard = async () => {
+    try {
+      const jsonString = JSON.stringify(deals, null, 2);
+      await navigator.clipboard.writeText(jsonString);
+      setExportFeedback('Payload copied to clipboard!');
+      setTimeout(() => setExportFeedback(null), 3500);
+      try {
+        alert('Payload copied to clipboard!');
+      } catch {}
+    } catch (err) {
+      console.error('Clipboard copy failed:', err);
+      setExportFeedback('Clipboard access denied. Use Download JSON instead.');
+      try {
+        alert('Clipboard access denied. Use Download JSON instead.');
+      } catch {}
+    }
+  };
+
   return (
     <div className="h-screen w-full flex flex-col bg-slate-50 overflow-hidden antialiased">
       {/* 2. STATIC HEADER (Takes up its natural height, does not scroll) */}
@@ -411,7 +502,34 @@ export default function App() {
       </div>
 
       {/* 3. SCROLLABLE CONTENT AREA */}
-      <main className="flex-1 overflow-y-auto overflow-x-hidden relative w-full pb-20">
+      <main id="main-scroll-container" className="flex-1 overflow-y-auto overflow-x-hidden relative w-full pb-20">
+        {/* --- TEMPORARY EXPORT BAR (DELETE AFTER TESTING) --- */}
+        <div className="m-4 p-4 bg-slate-900 rounded-xl shadow-lg border border-slate-700 flex flex-col gap-3">
+          <div className="flex items-center justify-between text-white text-xs font-bold uppercase tracking-wider">
+            <span>Debug Data Exporter <span className="text-emerald-400 font-mono text-[10px] ml-1 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">v4.1.0</span> ({Array.isArray(deals) ? deals.length : 0} items)</span>
+            {exportFeedback && (
+              <span className="text-emerald-400 font-medium normal-case text-[11px] animate-pulse">
+                {exportFeedback}
+              </span>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleDownloadJson}
+              className="flex-1 bg-emerald-600 active:bg-emerald-700 text-white font-semibold py-2.5 px-3 rounded-lg text-xs transition flex items-center justify-center gap-1.5"
+            >
+              📥 Download .json
+            </button>
+            <button
+              onClick={handleCopyToClipboard}
+              className="flex-1 bg-slate-700 active:bg-slate-600 text-white font-semibold py-2.5 px-3 rounded-lg text-xs transition flex items-center justify-center gap-1.5"
+            >
+              📋 Copy All
+            </button>
+          </div>
+        </div>
+        {/* --------------------------------------------------- */}
+
         <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
           {error && !isLoading && (
             <div className="mx-4 my-8 p-6 bg-rose-50 border border-rose-200 rounded-xl text-center shadow-sm">

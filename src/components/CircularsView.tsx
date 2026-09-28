@@ -63,17 +63,14 @@ export default function CircularsView({
   const [promoFilter, setPromoFilter] = useState<PromoFilter>('all');
   const [sortBy, setSortBy] = useState<SortOption>('discount');
 
-  // Ensure switching store tabs always snaps the view back to the top
+  // Ensure switching store tabs or filters always snaps the view back to the top
   useEffect(() => {
-    // Scroll window to top
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-
-    // If deals are contained in an internal scroll container, reset it as well:
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     const dealsContainer = document.getElementById('deals-container');
     if (dealsContainer) {
       dealsContainer.scrollTop = 0;
     }
-  }, [selectedStoreId]);
+  }, [selectedStoreId, selectedCategory, promoFilter]);
 
   const activeStore = useMemo(() => {
     if (selectedStoreId === 'all') return null;

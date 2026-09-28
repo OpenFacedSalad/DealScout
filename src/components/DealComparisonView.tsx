@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Scale,
   Sparkles,
@@ -38,6 +38,14 @@ export default function DealComparisonView({
   const [onlyMultiStore, setOnlyMultiStore] = useState(true);
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [verificationDeal, setVerificationDeal] = useState<DealItem | null>(null);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    const mainContainer = document.getElementById('main-scroll-container');
+    if (mainContainer) {
+      mainContainer.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    }
+  }, [activeFilter, selectedCategory, onlyMultiStore]);
 
   const handleAddToList = onAddToList || onToggleList;
 
@@ -166,7 +174,7 @@ export default function DealComparisonView({
         >
           All Deals
         </button>
-        {groups.map((group) => (
+        {Array.from(new Map(groups.map((g) => [g.genericProductGroup, g])).values()).map((group) => (
           <button
             key={group.genericProductGroup}
             onClick={() => setActiveFilter(activeFilter === group.genericProductGroup ? null : group.genericProductGroup)}

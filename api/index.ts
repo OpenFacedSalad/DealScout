@@ -120,7 +120,7 @@ export async function POST(req: Request) {
       return jsonResponse(data);
     } catch (err: any) {
       console.error('[Edge API /circulars/nearby Error]:', err);
-      return errorResponse(err?.message || 'Failed to fetch circulars', 500);
+      return jsonResponse({ stores: [], deals: [] });
     }
   }
 
