@@ -38,7 +38,8 @@ export interface AIComparisonResult {
 }
 
 const STRICT_COMMODITY_KEYS = [
-  "produce_apples", "produce_bananas", "produce_berries", "produce_grapes_conventional", "produce_grapes_organic", "produce_potatoes", "produce_onions", "produce_citrus", "produce_oranges", "produce_lemons", "produce_limes", "produce_grapefruits", "produce_squash", "produce_broccoli", "produce_corn",
+  "produce_apples", "produce_bananas", "produce_berries", "produce_grapes_conventional", "produce_grapes_organic", "produce_potatoes", "produce_onions",
+  "produce_oranges", "produce_lemons", "produce_limes", "produce_grapefruits", "produce_squash", "produce_broccoli", "produce_corn",
   "meat_chicken_breast", "meat_chicken_wings", "meat_beef_steak", "meat_beef_ground", "meat_pork", "meat_bacon", "meat_seafood",
   "dairy_milk_cow", "dairy_milk_plant", "dairy_butter_margarine", "dairy_eggs", "dairy_cheese", "dairy_yogurt",
   "pantry_cereal", "pantry_coffee", "pantry_pasta", "pantry_sauce", "pantry_sauce_pasta", "pantry_sauce_bbq", "pantry_snacks", "pantry_potatoes_boxed",
@@ -377,20 +378,22 @@ export function sanitizeAndValidateDeals(rawDeals: DealItem[]): DealItem[] {
       const combined = `${transcript} ${badge} ${title}`.trim();
 
       // Stage 3: Mathematical Unit Economics Contract
-      const multiMatch = combined.match(/(\d+)\s*(?:FOR|\/)\s*\$?(\d+(?:\.\d{2})?)/);
+      // Strip ground meat ratios before matching multi-buys
+      const cleanCombinedForMulti = combined.replace(/\b(70\/30|73\/27|75\/25|80\/20|85\/15|90\/10|93\/7|96\/4)\b/gi, ' ');
+      const multiMatch = cleanCombinedForMulti.match(/\b([2-9]|1[0-2])\s*(?:FOR|\/\s*\$)\s*\$?(\d+(?:\.\d{2})?)\b/i);
       let singleUnitSalePrice = deal.salePrice || 0;
       
       if (multiMatch) {
         const qty = parseInt(multiMatch[1], 10);
         const total = parseFloat(multiMatch[2]);
-        if (qty > 0 && total > 0) {
+        if (qty >= 2 && qty <= 12 && total > 0) {
           singleUnitSalePrice = Number((total / qty).toFixed(2));
           deal.bundleQuantity = qty;
           deal.bundleTotalPrice = total;
           deal.unitDescription = `${qty} for $${total.toFixed(2)} ($${singleUnitSalePrice.toFixed(2)} ea)`;
           deal.dealType = 'multi_buy';
         }
-      } else if (deal.bundleQuantity && deal.bundleQuantity > 1 && deal.bundleTotalPrice) {
+      } else if (deal.bundleQuantity && deal.bundleQuantity >= 2 && deal.bundleQuantity <= 12 && deal.bundleTotalPrice && deal.bundleTotalPrice > 0) {
         singleUnitSalePrice = Number((deal.bundleTotalPrice / deal.bundleQuantity).toFixed(2));
         deal.unitDescription = `${deal.bundleQuantity} for $${deal.bundleTotalPrice.toFixed(2)} ($${singleUnitSalePrice.toFixed(2)} ea)`;
         deal.dealType = 'multi_buy';
@@ -1341,81 +1344,15 @@ Return ONLY a valid JSON array of deal objects matching DealItem schema.
     }
   }
 
-  // === THE BATCH INTERCEPTION FIX ===
-  const aiClientForBatch = getAiClient();
-  const uncategorizedDeals = sanitizedCombinedDeals.filter(d => d.genericProductGroup === 'NEEDS_AI_SORT');
-  
-  if (aiClientForBatch && uncategorizedDeals.length > 0) {
-    try {
-      // Send all items (they are chunked internally now)
-      const batchItems = uncategorizedDeals.map(d => ({ id: d.id, title: d.title, brand: d.brand }));
-      // Pass the execution mode down to the batch categorizer
-      const categorized = await batchCategorizeItems(batchItems, executionMode);
-      const catMap = new Map(categorized.map(c => [c.id, c.genericProductGroup]));
-      const nounMap = new Map(categorized.map(c => [c.id, c.base_noun || 'unknown']));
-      
-      sanitizedCombinedDeals.forEach((d, i) => {
-        if (d.genericProductGroup === 'NEEDS_AI_SORT') {
-          const extractedNoun = nounMap.get(d.id) || categorized[i]?.base_noun?.toLowerCase() || 'unknown';
-          const mappedCategory = catMap.get(d.id) || classifyItemDeterministically(extractedNoun, d.brand);
-
-          if (mappedCategory && mappedCategory !== 'uncomparable') {
-            d.genericProductGroup = mappedCategory;
-          } else {
-            d.genericProductGroup = 'uncomparable';
-          }
-          d.brandMatchKey = d.brandMatchKey || cleanBrandMatchKey(d.title, d.brand);
-
-          d.subtitle = `Noun: [${extractedNoun}] -> Key: [${d.genericProductGroup}]`;
-        }
-      });
-      finalDeals.forEach((d, i) => {
-        if (d.genericProductGroup === 'NEEDS_AI_SORT') {
-          const extractedNoun = nounMap.get(d.id) || categorized[i]?.base_noun?.toLowerCase() || 'unknown';
-          const mappedCategory = catMap.get(d.id) || classifyItemDeterministically(extractedNoun, d.brand);
-
-          if (mappedCategory && mappedCategory !== 'uncomparable') {
-            d.genericProductGroup = mappedCategory;
-          } else {
-            d.genericProductGroup = 'uncomparable';
-          }
-          d.brandMatchKey = d.brandMatchKey || cleanBrandMatchKey(d.title, d.brand);
-
-          d.subtitle = `Noun: [${extractedNoun}] -> Key: [${d.genericProductGroup}]`;
-        }
-      });
-    } catch(err) {
-      sanitizedCombinedDeals.forEach(d => {
-        if (d.genericProductGroup === 'NEEDS_AI_SORT') {
-          d.genericProductGroup = 'uncomparable';
-          d.brandMatchKey = d.brandMatchKey || cleanBrandMatchKey(d.title, d.brand);
-          d.subtitle = `Noun: [unknown] -> Key: [uncomparable]`;
-        }
-      });
-      finalDeals.forEach(d => {
-        if (d.genericProductGroup === 'NEEDS_AI_SORT') {
-          d.genericProductGroup = 'uncomparable';
-          d.brandMatchKey = d.brandMatchKey || cleanBrandMatchKey(d.title, d.brand);
-          d.subtitle = `Noun: [unknown] -> Key: [uncomparable]`;
-        }
-      });
-    }
-  } else {
-    sanitizedCombinedDeals.forEach(d => {
-      if (d.genericProductGroup === 'NEEDS_AI_SORT') {
-        d.genericProductGroup = 'uncomparable';
-        d.brandMatchKey = d.brandMatchKey || cleanBrandMatchKey(d.title, d.brand);
-        d.subtitle = `Noun: [unknown] -> Key: [uncomparable]`;
-      }
-    });
-    finalDeals.forEach(d => {
-      if (d.genericProductGroup === 'NEEDS_AI_SORT') {
-        d.genericProductGroup = 'uncomparable';
-        d.brandMatchKey = d.brandMatchKey || cleanBrandMatchKey(d.title, d.brand);
-        d.subtitle = `Noun: [unknown] -> Key: [uncomparable]`;
-      }
-    });
-  }
+  // === LOCAL DETERMINISTIC CLASSIFICATION FIRST (5ms) ===
+  sanitizedCombinedDeals.forEach((d) => {
+    const localCat = classifyItemDeterministically(d.title, d.brand);
+    const { headNoun } = extractSyntacticHeadNoun(d.title, d.brand);
+    d.coreBaseNoun = headNoun;
+    d.genericProductGroup = localCat;
+    d.subtitle = `Noun: [${headNoun}] -> Key: [${localCat}]`;
+  });
+  finalDeals = sanitizedCombinedDeals;
 
   // Ensure every deal has a normalized brandMatchKey for 1-to-1 branded comparisons
   finalDeals.forEach(d => {
@@ -1796,40 +1733,119 @@ interface TaxonomicTarget {
   requiredDepartment: string;
 }
 
-// Stage 2: Flat dictionary indexed strictly by Head Noun (No if/else regex chains)
 const HEAD_NOUN_TAXONOMY: Record<string, TaxonomicTarget> = {
-  'cereal':    { commodityKey: 'pantry_cereal', requiredDepartment: 'pantry' },
-  'chips':     { commodityKey: 'snacks_potato_chips', requiredDepartment: 'pantry' },
-  'steak':     { commodityKey: 'meat_beef_steak', requiredDepartment: 'meat' },
-  'grapes':    { commodityKey: 'produce_grapes_conventional', requiredDepartment: 'produce' },
-  'butter':    { commodityKey: 'dairy_butter_margarine', requiredDepartment: 'dairy' },
-  'milk':      { commodityKey: 'dairy_milk_cow', requiredDepartment: 'dairy' },
-  'potatoes':  { commodityKey: 'produce_potatoes', requiredDepartment: 'produce' },
-  'potato':    { commodityKey: 'produce_potatoes', requiredDepartment: 'produce' },
-  'apples':    { commodityKey: 'produce_apples', requiredDepartment: 'produce' },
-  'apple':     { commodityKey: 'produce_apples', requiredDepartment: 'produce' },
-  'beef':      { commodityKey: 'meat_beef_ground', requiredDepartment: 'meat' },
-  'pasta':     { commodityKey: 'pantry_pasta', requiredDepartment: 'pantry' },
-  'sauce':     { commodityKey: 'pantry_sauce', requiredDepartment: 'pantry' },
-  'chicken':   { commodityKey: 'meat_chicken_breast', requiredDepartment: 'meat' },
-  'eggs':      { commodityKey: 'dairy_eggs', requiredDepartment: 'dairy' },
-  'cheese':    { commodityKey: 'dairy_cheese', requiredDepartment: 'dairy' },
-  'yogurt':    { commodityKey: 'dairy_yogurt', requiredDepartment: 'dairy' },
-  'pizza':     { commodityKey: 'frozen_pizza', requiredDepartment: 'frozen' },
-  'soda':      { commodityKey: 'beverages_soda', requiredDepartment: 'beverages' },
-  'water':     { commodityKey: 'beverages_water', requiredDepartment: 'beverages' },
-  'ribs':      { commodityKey: 'meat_pork', requiredDepartment: 'meat' },
+  // Produce - Citrus individual fruit categories
+  'orange':      { commodityKey: 'produce_oranges', requiredDepartment: 'produce' },
+  'oranges':     { commodityKey: 'produce_oranges', requiredDepartment: 'produce' },
+  'mandarins':   { commodityKey: 'produce_oranges', requiredDepartment: 'produce' },
+  'clementines': { commodityKey: 'produce_oranges', requiredDepartment: 'produce' },
+  'lemon':       { commodityKey: 'produce_lemons', requiredDepartment: 'produce' },
+  'lemons':      { commodityKey: 'produce_lemons', requiredDepartment: 'produce' },
+  'lime':        { commodityKey: 'produce_limes', requiredDepartment: 'produce' },
+  'limes':       { commodityKey: 'produce_limes', requiredDepartment: 'produce' },
+  'grapefruit':  { commodityKey: 'produce_grapefruits', requiredDepartment: 'produce' },
+  'grapefruits': { commodityKey: 'produce_grapefruits', requiredDepartment: 'produce' },
+  // Produce - General commodities (no varietal fragmentation)
+  'apple':       { commodityKey: 'produce_apples', requiredDepartment: 'produce' },
+  'apples':      { commodityKey: 'produce_apples', requiredDepartment: 'produce' },
+  'banana':      { commodityKey: 'produce_bananas', requiredDepartment: 'produce' },
+  'bananas':     { commodityKey: 'produce_bananas', requiredDepartment: 'produce' },
+  'broccoli':    { commodityKey: 'produce_broccoli', requiredDepartment: 'produce' },
+  'corn':        { commodityKey: 'produce_corn', requiredDepartment: 'produce' },
+  'potato':      { commodityKey: 'produce_potatoes', requiredDepartment: 'produce' },
+  'potatoes':    { commodityKey: 'produce_potatoes', requiredDepartment: 'produce' },
+  'onion':       { commodityKey: 'produce_onions', requiredDepartment: 'produce' },
+  'onions':      { commodityKey: 'produce_onions', requiredDepartment: 'produce' },
+  'squash':      { commodityKey: 'produce_squash', requiredDepartment: 'produce' },
+  'grapes':      { commodityKey: 'produce_grapes_conventional', requiredDepartment: 'produce' },
+  'strawberries':{ commodityKey: 'produce_berries', requiredDepartment: 'produce' },
+  'blueberries': { commodityKey: 'produce_berries', requiredDepartment: 'produce' },
+  'raspberries': { commodityKey: 'produce_berries', requiredDepartment: 'produce' },
+  'blackberries':{ commodityKey: 'produce_berries', requiredDepartment: 'produce' },
+  // Meat & Seafood
+  'steak':       { commodityKey: 'meat_beef_steak', requiredDepartment: 'meat' },
+  'steaks':      { commodityKey: 'meat_beef_steak', requiredDepartment: 'meat' },
+  'beef':        { commodityKey: 'meat_beef_ground', requiredDepartment: 'meat' },
+  'chicken':     { commodityKey: 'meat_chicken_breast', requiredDepartment: 'meat' },
+  'wings':       { commodityKey: 'meat_chicken_wings', requiredDepartment: 'meat' },
+  'pork':        { commodityKey: 'meat_pork', requiredDepartment: 'meat' },
+  'ham':         { commodityKey: 'meat_pork', requiredDepartment: 'meat' },
+  'chops':       { commodityKey: 'meat_pork', requiredDepartment: 'meat' },
+  'ribs':        { commodityKey: 'meat_pork', requiredDepartment: 'meat' },
+  'bacon':       { commodityKey: 'meat_bacon', requiredDepartment: 'meat' },
+  'salmon':      { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
+  'shrimp':      { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
+  'fish':        { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
+  'tilapia':     { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
+  'cod':         { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
+  'crab':        { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
+  'lobster':     { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
+  // Dairy
+  'eggs':        { commodityKey: 'dairy_eggs', requiredDepartment: 'dairy' },
+  'cheese':      { commodityKey: 'dairy_cheese', requiredDepartment: 'dairy' },
+  'milk':        { commodityKey: 'dairy_milk_cow', requiredDepartment: 'dairy' },
+  'butter':      { commodityKey: 'dairy_butter_margarine', requiredDepartment: 'dairy' },
+  'margarine':   { commodityKey: 'dairy_butter_margarine', requiredDepartment: 'dairy' },
+  'yogurt':      { commodityKey: 'dairy_yogurt', requiredDepartment: 'dairy' },
+  // Pantry & Frozen
+  'cereal':      { commodityKey: 'pantry_cereal', requiredDepartment: 'pantry' },
+  'coffee':      { commodityKey: 'pantry_coffee', requiredDepartment: 'pantry' },
+  'pasta':       { commodityKey: 'pantry_pasta', requiredDepartment: 'pantry' },
+  'sauce':       { commodityKey: 'pantry_sauce', requiredDepartment: 'pantry' },
+  'chips':       { commodityKey: 'snacks_potato_chips', requiredDepartment: 'pantry' },
+  'pretzels':    { commodityKey: 'pantry_snacks', requiredDepartment: 'pantry' },
+  'cookies':     { commodityKey: 'pantry_snacks', requiredDepartment: 'pantry' },
+  'pizza':       { commodityKey: 'frozen_pizza', requiredDepartment: 'frozen' },
+  'ice cream':   { commodityKey: 'frozen_ice_cream', requiredDepartment: 'frozen' },
+  'waffles':     { commodityKey: 'frozen_waffles_pancakes', requiredDepartment: 'frozen' },
+  'pancakes':    { commodityKey: 'frozen_waffles_pancakes', requiredDepartment: 'frozen' },
+  // Beverages
+  'soda':        { commodityKey: 'beverages_soda', requiredDepartment: 'beverages' },
+  'water':       { commodityKey: 'beverages_water', requiredDepartment: 'beverages' },
+  'juice':       { commodityKey: 'beverages_juice', requiredDepartment: 'beverages' },
 };
 
-export function classifyItemDeterministically(title: string, brand?: string | null, description?: string | null): string {
+export function classifyItemDeterministically(title: string, brand?: string | null, _description?: string | null): string {
   const { modifiers, headNoun } = extractSyntacticHeadNoun(title, brand);
-  
+
+  // 1. Compound Modifier Disambiguation (Protects pork/ham steaks, peanut butter, etc.)
+  if (headNoun === 'steak' || headNoun === 'steaks') {
+    if (modifiers.includes('ham') || modifiers.includes('pork')) return 'meat_pork';
+    if (modifiers.includes('tuna') || modifiers.includes('salmon')) return 'meat_seafood';
+    if (modifiers.includes('sauce') || modifiers.includes('roll') || modifiers.includes('rolls')) return 'uncomparable';
+    return 'meat_beef_steak';
+  }
+
+  if (headNoun === 'butter') {
+    if (modifiers.includes('peanut') || modifiers.includes('almond') || modifiers.includes('apple') || modifiers.includes('cookie')) {
+      return 'pantry_snacks';
+    }
+    return 'dairy_butter_margarine';
+  }
+
+  if (headNoun === 'sauce') {
+    if (modifiers.includes('marinara') || modifiers.includes('pasta') || modifiers.includes('spaghetti') || modifiers.includes('alfredo')) {
+      return 'pantry_sauce_pasta';
+    }
+    if (modifiers.includes('bbq') || modifiers.includes('barbecue')) {
+      return 'pantry_sauce_bbq';
+    }
+    return 'pantry_sauce';
+  }
+
+  if (headNoun === 'bites' || headNoun === 'mix' || headNoun === 'bowl' || headNoun === 'dinner') {
+    return 'uncomparable';
+  }
+
+  // 2. Direct Head Noun Lookup
   const match = HEAD_NOUN_TAXONOMY[headNoun];
   if (!match) return 'uncomparable';
 
-  // Strict sub-classification within validated families only
+  // 3. Sub-family distinction within verified parent family
   if (headNoun === 'grapes' && modifiers.includes('organic')) return 'produce_grapes_organic';
-  if (headNoun === 'milk' && (modifiers.includes('oat') || modifiers.includes('almond') || modifiers.includes('soy'))) return 'dairy_milk_plant';
+  if (headNoun === 'milk' && (modifiers.includes('oat') || modifiers.includes('almond') || modifiers.includes('soy') || modifiers.includes('plant'))) {
+    return 'dairy_milk_plant';
+  }
 
   return match.commodityKey;
 }
