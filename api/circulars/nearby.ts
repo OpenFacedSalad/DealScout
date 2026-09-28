@@ -16,7 +16,9 @@ export async function OPTIONS() {
 
 export async function POST(req: Request) {
   try {
+    const url = new URL(req.url);
     const body = await req.json().catch(() => ({}));
+    const executionMode = (url.searchParams.get('executionMode') as 'sequential' | 'parallel') || body?.executionMode || 'parallel';
     const { lat, lng, city, state, zipCode, radiusMiles } = body || {};
 
     const targetLat = lat !== undefined && !isNaN(Number(lat)) ? Number(lat) : 40.2137;
@@ -32,7 +34,8 @@ export async function POST(req: Request) {
       targetCity,
       targetState,
       targetZip,
-      targetRadius
+      targetRadius,
+      executionMode
     );
 
     return new Response(JSON.stringify(data), {

@@ -97,6 +97,7 @@ export default function App() {
   const [activeDocType, setActiveDocType] = useState<'design' | 'code' | 'devtools'>('design');
   const [selectedComparisonGroup, setSelectedComparisonGroup] = useState<ComparisonGroup | null>(null);
   const [exportFeedback, setExportFeedback] = useState<string | null>(null);
+  const [executionMode, setExecutionMode] = useState<'sequential' | 'parallel'>('parallel');
 
   useEffect(() => {
     safeStorage.setItem(STORAGE_KEY_LOCATION, JSON.stringify(location));
@@ -126,7 +127,7 @@ export default function App() {
   const inFlightAbortRef = useRef<AbortController | null>(null);
 
   const fetchCirculars = useCallback(
-    async (targetLocation: UserLocation, targetRadius: number) => {
+    async (targetLocation: UserLocation, targetRadius: number, mode: 'sequential' | 'parallel' = 'parallel') => {
       // Cleanly abort any previous in-flight request
       if (inFlightAbortRef.current) {
         inFlightAbortRef.current.abort();
@@ -152,10 +153,11 @@ export default function App() {
         state: targetLocation?.state || 'PA',
         zipCode: targetLocation?.zipCode || '17050',
         radiusMiles: targetRadius || 10,
+        executionMode: mode,
       };
 
       const doFetch = async () => {
-        const response = await fetch('/api/circulars/nearby', {
+        const response = await fetch(`/api/circulars/nearby?executionMode=${mode}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -245,13 +247,13 @@ export default function App() {
   );
 
   useEffect(() => {
-    fetchCirculars(location, radiusMiles);
+    fetchCirculars(location, radiusMiles, executionMode);
     return () => {
       if (inFlightAbortRef.current) {
         inFlightAbortRef.current.abort();
       }
     };
-  }, [location, radiusMiles, fetchCirculars]);
+  }, [location, radiusMiles, executionMode, fetchCirculars]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
@@ -506,7 +508,7 @@ export default function App() {
         {/* --- TEMPORARY EXPORT BAR (DELETE AFTER TESTING) --- */}
         <div className="m-4 p-4 bg-slate-900 rounded-xl shadow-lg border border-slate-700 flex flex-col gap-3">
           <div className="flex items-center justify-between text-white text-xs font-bold uppercase tracking-wider">
-            <span>Debug Data Exporter <span className="text-emerald-400 font-mono text-[10px] ml-1 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">v4.1.0</span> ({Array.isArray(deals) ? deals.length : 0} items)</span>
+            <span>Debug Data Exporter <span className="text-emerald-400 font-mono text-[10px] ml-1 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">v4.2.0</span> ({Array.isArray(deals) ? deals.length : 0} items)</span>
             {exportFeedback && (
               <span className="text-emerald-400 font-medium normal-case text-[11px] animate-pulse">
                 {exportFeedback}
@@ -530,13 +532,42 @@ export default function App() {
         </div>
         {/* --------------------------------------------------- */}
 
+        {/* TEMPORARY API TOGGLE (Remove before public rollout) */}
+        <div className="w-full max-w-lg mx-auto bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 shadow-sm">
+          <div className="text-[11px] font-bold text-amber-800 uppercase tracking-wider mb-2 text-center">
+            API Execution Mode (Testing Only)
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setExecutionMode('sequential')}
+              className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition border ${
+                executionMode === 'sequential' 
+                ? 'bg-amber-500 text-white border-amber-600 shadow-inner' 
+                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              🐢 Sequential (Free API)
+            </button>
+            <button
+              onClick={() => setExecutionMode('parallel')}
+              className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition border ${
+                executionMode === 'parallel' 
+                ? 'bg-emerald-600 text-white border-emerald-700 shadow-inner' 
+                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              ⚡ Simultaneous (Paid API)
+            </button>
+          </div>
+        </div>
+
         <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
           {error && !isLoading && (
             <div className="mx-4 my-8 p-6 bg-rose-50 border border-rose-200 rounded-xl text-center shadow-sm">
               <h3 className="text-rose-800 font-bold mb-2">Live Search Failed</h3>
               <p className="text-sm text-rose-600 mb-4">{error}</p>
               <button
-                onClick={() => window.location.reload()} 
+                onClick={() => fetchCirculars(location, radiusMiles, executionMode)} 
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold rounded-lg transition"
               >
                 Retry Search

@@ -1068,9 +1068,10 @@ export async function getCircularsForLocation(
   city: string = 'Mechanicsburg',
   state: string = 'PA',
   zipCode: string = '17050',
-  radiusMiles: number = 10
+  radiusMiles: number = 10,
+  executionMode: 'sequential' | 'parallel' = 'parallel'
 ): Promise<{ stores: Store[]; deals: DealItem[] }> {
-  const cacheKey = `${lat.toFixed(2)}_${lng.toFixed(2)}_${radiusMiles}`;
+  const cacheKey = `${lat.toFixed(2)}_${lng.toFixed(2)}_${radiusMiles}_${executionMode}`;
   const cached = circularsCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     return cached.data;
@@ -1348,22 +1349,22 @@ Return ONLY a valid JSON array of deal objects matching DealItem schema.
     try {
       // Send all items (they are chunked internally now)
       const batchItems = uncategorizedDeals.map(d => ({ id: d.id, title: d.title, brand: d.brand }));
-      const categorized = await batchCategorizeItems(batchItems);
+      // Pass the execution mode down to the batch categorizer
+      const categorized = await batchCategorizeItems(batchItems, executionMode);
       const catMap = new Map(categorized.map(c => [c.id, c.genericProductGroup]));
       const nounMap = new Map(categorized.map(c => [c.id, c.base_noun || 'unknown']));
-      const brandMap = new Map(categorized.map(c => [c.id, c.brandMatchKey || '']));
       
       sanitizedCombinedDeals.forEach((d, i) => {
         if (d.genericProductGroup === 'NEEDS_AI_SORT') {
           const extractedNoun = nounMap.get(d.id) || categorized[i]?.base_noun?.toLowerCase() || 'unknown';
-          const mappedCategory = catMap.get(d.id) || NOUN_TO_COMMODITY_MAP[extractedNoun];
+          const mappedCategory = catMap.get(d.id) || classifyItemDeterministically(extractedNoun, d.brand);
 
-          if (mappedCategory) {
+          if (mappedCategory && mappedCategory !== 'uncomparable') {
             d.genericProductGroup = mappedCategory;
           } else {
             d.genericProductGroup = 'uncomparable';
           }
-          d.brandMatchKey = brandMap.get(d.id) || d.brandMatchKey || cleanBrandMatchKey(d.title, d.brand);
+          d.brandMatchKey = d.brandMatchKey || cleanBrandMatchKey(d.title, d.brand);
 
           d.subtitle = `Noun: [${extractedNoun}] -> Key: [${d.genericProductGroup}]`;
         }
@@ -1371,14 +1372,14 @@ Return ONLY a valid JSON array of deal objects matching DealItem schema.
       finalDeals.forEach((d, i) => {
         if (d.genericProductGroup === 'NEEDS_AI_SORT') {
           const extractedNoun = nounMap.get(d.id) || categorized[i]?.base_noun?.toLowerCase() || 'unknown';
-          const mappedCategory = catMap.get(d.id) || NOUN_TO_COMMODITY_MAP[extractedNoun];
+          const mappedCategory = catMap.get(d.id) || classifyItemDeterministically(extractedNoun, d.brand);
 
-          if (mappedCategory) {
+          if (mappedCategory && mappedCategory !== 'uncomparable') {
             d.genericProductGroup = mappedCategory;
           } else {
             d.genericProductGroup = 'uncomparable';
           }
-          d.brandMatchKey = brandMap.get(d.id) || d.brandMatchKey || cleanBrandMatchKey(d.title, d.brand);
+          d.brandMatchKey = d.brandMatchKey || cleanBrandMatchKey(d.title, d.brand);
 
           d.subtitle = `Noun: [${extractedNoun}] -> Key: [${d.genericProductGroup}]`;
         }
@@ -1882,22 +1883,11 @@ function cleanBrandMatchKey(title: string, brand?: string | null): string {
 }
 
 export async function batchCategorizeItems(
-  items: { id: string; title: string; brand?: string | null }[]
-): Promise<{ id: string; genericProductGroup: string; base_noun?: string; brandMatchKey?: string; category?: string }[]> {
-  if (!items || items.length === 0) return [];
-
+  items: { id: string; title: string; brand?: string | null }[],
+  executionMode: 'sequential' | 'parallel' = 'parallel'
+): Promise<{ id: string; genericProductGroup: string; base_noun?: string; category?: string }[]> {
   const ai = getAiClient();
-  const resultMap = new Map<string, { base_noun: string; brand_match_key: string; genericProductGroup: string }>();
-
-  // If no AI or cooldown from rate limiting, use local fallback
-  if (!ai || Date.now() < globalBatchAiCooldownUntil) {
-    return items.map((i) => {
-      const noun = cleanNounFallback(i.title);
-      const mappedCat = NOUN_TO_COMMODITY_MAP[noun] || classifyItemDeterministically(i.title, i.brand);
-      const brandKey = cleanBrandMatchKey(i.title, i.brand);
-      return { id: i.id, genericProductGroup: mappedCat, base_noun: noun, brandMatchKey: brandKey, category: mappedCat };
-    });
-  }
+  if (!ai || items.length === 0) return [];
 
   const promptTemplate = `
 You are a strict linguistic extractor. Your ONLY job is to identify the singular core physical item (the head noun) of each grocery product.
@@ -1913,98 +1903,78 @@ Output EXACTLY a JSON array of objects. Each object must have a single key "base
 Input items:
 `;
 
-  // Chunk items into batches of 35 to ensure high AI fidelity and fit schema without truncation
-  const chunkSize = 35;
-  const chunks: { id: string; title: string; brand?: string | null }[][] = [];
+  const chunkSize = 40;
+  const chunks = [];
   for (let i = 0; i < items.length; i += chunkSize) {
     chunks.push(items.slice(i, i + chunkSize));
   }
 
-  const processChunk = async (chunk: { id: string; title: string; brand?: string | null }[]) => {
+  // 1. Define the isolated chunk processor
+  const processChunk = async (chunk: any[]) => {
+    const chunkResults: { id: string; genericProductGroup: string; base_noun: string; category?: string }[] = [];
+    
+    if (Date.now() < globalBatchAiCooldownUntil) {
+      for (const item of chunk) {
+        const detCat = classifyItemDeterministically(item.title, item.brand);
+        chunkResults.push({ id: item.id, base_noun: 'unknown', genericProductGroup: detCat, category: detCat });
+      }
+      return chunkResults;
+    }
+
     try {
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Batch AI Timeout')), 15000)
-      );
-
-      const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
-      let response: any;
-      let lastErr: any;
-
-      for (const model of modelsToTry) {
-        try {
-          const aiPromise = ai.models.generateContent({
-            model,
-            contents: [promptTemplate + JSON.stringify(chunk.map(c => ({ id: c.id, title: c.title, brand: c.brand })), null, 2)],
-            config: {
-              responseMimeType: 'application/json',
-              responseSchema: categoryBatchSchema,
-              temperature: 0.0,
-            },
-          });
-          response = await Promise.race([aiPromise, timeoutPromise]);
-          if (response?.text) break;
-        } catch (mErr: any) {
-          lastErr = mErr;
-          continue;
-        }
-      }
-
-      if (!response?.text && lastErr) {
-        throw lastErr;
-      }
-
-      const parsed = JSON.parse(response?.text || '[]');
-
-      chunk.forEach((item, idx) => {
-        const p = Array.isArray(parsed) ? (parsed[idx] || parsed.find((x: any) => x.id === item.id)) : null;
-        const extractedNoun = (p?.base_noun || '').toLowerCase().trim() || cleanNounFallback(item.title);
-        const brandKey = (p?.brand_match_key || '').toLowerCase().trim() || cleanBrandMatchKey(item.title, item.brand);
-        const mappedCategory = NOUN_TO_COMMODITY_MAP[extractedNoun] || 'uncomparable';
-        resultMap.set(item.id, {
-          base_noun: extractedNoun,
-          brand_match_key: brandKey,
-          genericProductGroup: mappedCategory,
+      let response;
+      try {
+        response = await ai.models.generateContent({
+          model: 'gemini-1.5-flash',
+          contents: [promptTemplate + JSON.stringify(chunk, null, 2)],
+          config: { responseMimeType: 'application/json', responseSchema: categoryBatchSchema, temperature: 0.0 },
         });
-      });
+      } catch {
+        response = await ai.models.generateContent({
+          model: 'gemini-flash-latest',
+          contents: [promptTemplate + JSON.stringify(chunk, null, 2)],
+          config: { responseMimeType: 'application/json', responseSchema: categoryBatchSchema, temperature: 0.0 },
+        });
+      }
+
+      const parsed = JSON.parse(response.text || '[]');
+      if (Array.isArray(parsed)) {
+        chunk.forEach((item, idx) => {
+          const p = parsed[idx] || parsed.find((x: any) => x.id === item.id);
+          const extractedNoun = (p?.base_noun || '').toLowerCase().trim() || 'unknown';
+          const mappedCategory = classifyItemDeterministically(extractedNoun, item.brand);
+          chunkResults.push({ id: item.id, base_noun: extractedNoun, genericProductGroup: mappedCategory, category: mappedCategory });
+        });
+      } else {
+        throw new Error("Invalid JSON array returned");
+      }
     } catch (err: any) {
       const errMsg = err?.message || String(err);
-      const isQuota =
-        err?.status === 'RESOURCE_EXHAUSTED' ||
-        err?.code === 429 ||
-        errMsg.includes('429') ||
-        errMsg.includes('quota') ||
-        errMsg.includes('Quota exceeded') ||
-        errMsg.includes('RESOURCE_EXHAUSTED');
-
-      if (isQuota) {
+      if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
         globalBatchAiCooldownUntil = Date.now() + 60000;
-        console.info('[Gemini Batch] API quota limit reached; applying fallback.');
-      } else {
-        console.info('[Gemini Batch] Chunk classification skipped:', errMsg);
       }
-
       chunk.forEach((item) => {
-        const noun = cleanNounFallback(item.title);
-        const mappedCat = NOUN_TO_COMMODITY_MAP[noun] || classifyItemDeterministically(item.title, item.brand);
-        const brandKey = cleanBrandMatchKey(item.title, item.brand);
-        resultMap.set(item.id, {
-          base_noun: noun,
-          brand_match_key: brandKey,
-          genericProductGroup: mappedCat,
-        });
+        const detCat = classifyItemDeterministically(item.title, item.brand);
+        chunkResults.push({ id: item.id, base_noun: 'unknown', genericProductGroup: detCat, category: detCat });
       });
     }
+    return chunkResults;
   };
 
-  // Process all chunks concurrently
-  await Promise.all(chunks.map(chunk => processChunk(chunk)));
-
-  return items.map((i) => {
-    const match = resultMap.get(i.id);
-    const group = match?.genericProductGroup || 'uncomparable';
-    const noun = match?.base_noun || 'unknown';
-    const brandKey = match?.brand_match_key || cleanBrandMatchKey(i.title, i.brand);
-    return { id: i.id, genericProductGroup: group, base_noun: noun, brandMatchKey: brandKey, category: group };
-  });
+  // 2. Toggle Execution Mode based on UI preference
+  if (executionMode === 'parallel') {
+    // PAID TIER: Blast all chunks concurrently
+    const resolvedArrays = await Promise.all(chunks.map(processChunk));
+    return resolvedArrays.flat();
+  } else {
+    // FREE TIER: Process one chunk at a time, with a strict 3.5 second delay to stay under 15 RPM
+    const allResults = [];
+    for (const chunk of chunks) {
+      const res = await processChunk(chunk);
+      allResults.push(...res);
+      await new Promise(resolve => setTimeout(resolve, 3500));
+    }
+    return allResults;
+  }
 }
 

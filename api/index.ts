@@ -99,6 +99,7 @@ export async function POST(req: Request) {
   // Route: /api/circulars/nearby
   if (pathname.includes('/circulars/nearby')) {
     try {
+      const executionMode = (url.searchParams.get('executionMode') as 'sequential' | 'parallel') || body?.executionMode || 'parallel';
       const { lat, lng, city, state, zipCode, radiusMiles } = body || {};
 
       const targetLat = lat !== undefined && !isNaN(Number(lat)) ? Number(lat) : 40.2137;
@@ -114,7 +115,8 @@ export async function POST(req: Request) {
         targetCity,
         targetState,
         targetZip,
-        targetRadius
+        targetRadius,
+        executionMode
       );
 
       return jsonResponse(data);

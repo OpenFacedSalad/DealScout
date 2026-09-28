@@ -84,6 +84,7 @@ async function startServer() {
   app.post('/api/circulars/nearby', async (req: Request, res: Response) => {
     try {
       const { lat, lng, city, state, zipCode, radiusMiles } = req.body || {};
+      const executionMode = ((req.query.executionMode as string) || req.body?.executionMode) === 'sequential' ? 'sequential' : 'parallel';
 
       const targetLat = lat !== undefined && !isNaN(Number(lat)) ? Number(lat) : 40.2137;
       const targetLng = lng !== undefined && !isNaN(Number(lng)) ? Number(lng) : -77.0075;
@@ -98,7 +99,8 @@ async function startServer() {
         targetCity,
         targetState,
         targetZip,
-        radius
+        radius,
+        executionMode
       );
 
       return res.json(data);
