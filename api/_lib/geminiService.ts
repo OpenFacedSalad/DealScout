@@ -4,6 +4,7 @@ import { Store, DealItem } from '../../src/types.js';
 import { findPhysicalGroceryStoresOSM, getRegionalDefaultStores } from './storeFinder.js';
 import { getFullKarnsCircularDeals } from './karnsScraper.js';
 import { fetchLiveDealsForStore } from './liveCircularScraper.js';
+import { sanitizeDealItem } from './dealPricing.js';
 
 let aiClient: GoogleGenAI | null = null;
 
@@ -29,6 +30,9 @@ export function getAiClient(): GoogleGenAI | null {
   return aiClient;
 }
 
+let globalAiSearchCooldownUntil = 0;
+let globalOcrCooldownUntil = 0;
+
 export interface AIComparisonResult {
   bestDealId: string;
   verdict: string;
@@ -41,7 +45,7 @@ const STRICT_COMMODITY_KEYS = [
   "produce_apples", "produce_bananas", "produce_berries", "produce_grapes_conventional", "produce_grapes_organic", "produce_potatoes", "produce_onions",
   "produce_oranges", "produce_lemons", "produce_limes", "produce_grapefruits", "produce_squash", "produce_broccoli", "produce_corn",
   "meat_chicken_breast", "meat_chicken_wings", "meat_beef_steak", "meat_beef_ground", "meat_pork", "meat_bacon", "meat_seafood",
-  "dairy_milk_cow", "dairy_milk_plant", "dairy_butter_margarine", "dairy_eggs", "dairy_cheese", "dairy_yogurt",
+  "dairy_milk_cow", "dairy_milk_plant", "dairy_butter_margarine", "dairy_eggs", "dairy_cheese", "dairy_yogurt", "dairy_sour_cream", "dairy_cottage_cheese", "dairy_cream", "dairy_creamer",
   "pantry_cereal", "pantry_coffee", "pantry_pasta", "pantry_sauce", "pantry_sauce_pasta", "pantry_sauce_bbq", "pantry_snacks", "pantry_potatoes_boxed",
   "frozen_pizza", "frozen_waffles_pancakes", "frozen_ice_cream", "frozen_meals",
   "beverages_soda", "beverages_water", "beverages_juice", "beverages_energy", "beverages_sports",
@@ -424,10 +428,9 @@ export function sanitizeAndValidateDeals(rawDeals: DealItem[]): DealItem[] {
       }
       deal.normalizedUnitType = nType;
 
-      // Lock Math Contract
-      deal.normalizedUnitCost = deal.isUnpricedPromo ? 0 : deal.salePrice;
+      // Defer math contract to sanitizeDealItem in dealPricing.ts
       if (!deal.unitPrice || deal.unitPrice.includes('undefined')) {
-        deal.unitPrice = deal.isUnpricedPromo ? 'Free / Unpriced' : `$${deal.normalizedUnitCost.toFixed(2)} / ${deal.normalizedUnitType}`;
+        deal.unitPrice = deal.isUnpricedPromo ? 'Free / Unpriced' : `$${deal.salePrice?.toFixed(2)} each`;
       }
 
       // Strip non-verified MSRPs
@@ -448,7 +451,7 @@ export function sanitizeAndValidateDeals(rawDeals: DealItem[]): DealItem[] {
       const originalSubtitle = deal.subtitle ? deal.subtitle + ' | ' : '';
       deal.subtitle = `${originalSubtitle}Noun: [${debugNoun}] -> Key: [${debugKey}]`;
 
-      return deal;
+      return sanitizeDealItem(deal);
     });
 
   return cleanedDeals;
@@ -562,8 +565,10 @@ Respond ONLY with valid JSON matching this schema:
           errMsg.includes('RESOURCE_EXHAUSTED');
 
         if (isQuota) {
-          console.info(`[OCR] Model ${model} reached quota limit; trying next fallback model.`);
-          continue;
+          quotaHit = true;
+          globalOcrCooldownUntil = Date.now() + 5 * 60 * 1000;
+          console.info(`[OCR] Quota limit reached on ${model}; activated 5-min cooldown.`);
+          break;
         }
 
         const isUnavailable =
@@ -678,6 +683,7 @@ export async function enrichDealsWithOCR(
     candidateDeals.push(...multiBuyCandidates.slice(0, MAX_OCR_CANDIDATES - candidateDeals.length));
   }
 
+  if (Date.now() < globalOcrCooldownUntil) return deals;
   if (candidateDeals.length === 0) return deals;
 
   const ocrResults: { id: string; update: Partial<DealItem> | null }[] = [];
@@ -696,7 +702,7 @@ export async function enrichDealsWithOCR(
         ocrResults.push({ id: deal.id, update });
       }
     } catch (err: any) {
-      console.warn('[Gemini OCR] Error processing candidate tile:', err?.message || err);
+      console.info('[Gemini OCR] Tile processing skipped; retaining standard circular item.');
     }
   }
 
@@ -1154,20 +1160,23 @@ export async function getCircularsForLocation(
   const ai = getAiClient();
 
   if (storesNeedingDeals.length > 0 && ai) {
-    try {
-      const storeSummary = storesNeedingDeals.map((s) => ({
-        id: s.id,
-        name: s.name,
-        chain: s.chain,
-        address: `${s.address}, ${s.city}`,
-      }));
+    if (Date.now() < globalAiSearchCooldownUntil) {
+      console.info('[Gemini] Live AI search in cooldown; using curated circular specials fallback.');
+    } else {
+      try {
+        const storeSummary = storesNeedingDeals.map((s) => ({
+          id: s.id,
+          name: s.name,
+          chain: s.chain,
+          address: `${s.address}, ${s.city}`,
+        }));
 
-      const currentDate = new Date().toISOString().split('T')[0];
-      const searchInstructions = storesNeedingDeals.map((s) => {
-        return `- ${s.name}: "${s.name} ${city} ${state} weekly ad circular deals"`;
-      }).join('\n');
+        const currentDate = new Date().toISOString().split('T')[0];
+        const searchInstructions = storesNeedingDeals.map((s) => {
+          return `- ${s.name}: "${s.name} ${city} ${state} weekly ad circular deals"`;
+        }).join('\n');
 
-      const prompt = `
+        const prompt = `
 Based on current weekly grocery circulars, flyers, and advertised specials for supermarkets near ${city}, ${state} ${zipCode} active as of ${currentDate}:
 
 Specifically, search for:
@@ -1208,58 +1217,70 @@ Extract authentic advertised items, sales, and butcher shop specials.
 Return ONLY a valid JSON array of deal objects matching DealItem schema.
 `;
 
-      const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
-      let lastLlmError: any = null;
-      for (let i = 0; i < modelsToTry.length; i++) {
-        try {
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('AbortError: Timeout after 25s')), 25000)
-          );
-          const result = (await Promise.race([
-            ai.models.generateContent({
-              model: modelsToTry[i],
-              contents: prompt,
-              config: {
-                responseMimeType: 'application/json',
-                responseSchema: dealsResponseSchema,
-                temperature: 0.1,
-              },
-            }),
-            timeoutPromise,
-          ])) as any;
-          if (result?.text && result.text.trim()) {
-            const parsed = parseJsonFromText<DealItem[]>(result.text, []);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              const sanitized = sanitizeAndValidateDeals(parsed);
-              if (sanitized.length > 0) {
-                aiDeals = sanitized;
-                lastLlmError = null;
-                break;
+        const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+        let lastLlmError: any = null;
+        for (let i = 0; i < modelsToTry.length; i++) {
+          try {
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('AbortError: Timeout after 25s')), 25000)
+            );
+            const result = (await Promise.race([
+              ai.models.generateContent({
+                model: modelsToTry[i],
+                contents: prompt,
+                config: {
+                  responseMimeType: 'application/json',
+                  responseSchema: dealsResponseSchema,
+                  temperature: 0.1,
+                },
+              }),
+              timeoutPromise,
+            ])) as any;
+            if (result?.text && result.text.trim()) {
+              const parsed = parseJsonFromText<DealItem[]>(result.text, []);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                const sanitized = sanitizeAndValidateDeals(parsed);
+                if (sanitized.length > 0) {
+                  aiDeals = sanitized;
+                  lastLlmError = null;
+                  break;
+                }
               }
             }
-          }
-        } catch (tierErr: any) {
-          lastLlmError = tierErr;
-          const errMsg = tierErr?.message || String(tierErr);
-          const isQuota =
-            tierErr?.status === 'RESOURCE_EXHAUSTED' ||
-            tierErr?.code === 429 ||
-            errMsg.includes('429') ||
-            errMsg.includes('quota') ||
-            errMsg.includes('Quota exceeded') ||
-            errMsg.includes('RESOURCE_EXHAUSTED');
-          if (isQuota) {
-            console.info(`[Gemini] Model ${modelsToTry[i]} reached quota limit; trying next fallback model.`);
-            continue;
+          } catch (tierErr: any) {
+            lastLlmError = tierErr;
+            const errMsg = tierErr?.message || String(tierErr);
+            const isQuota =
+              tierErr?.status === 'RESOURCE_EXHAUSTED' ||
+              tierErr?.code === 429 ||
+              errMsg.includes('429') ||
+              errMsg.includes('quota') ||
+              errMsg.includes('Quota exceeded') ||
+              errMsg.includes('RESOURCE_EXHAUSTED');
+            if (isQuota) {
+              globalAiSearchCooldownUntil = Date.now() + 5 * 60 * 1000;
+              console.info(`[Gemini] Live AI search reached quota limit on ${modelsToTry[i]}; activated 5-min cooldown.`);
+              break;
+            }
+            const isUnavailable =
+              tierErr?.status === 'UNAVAILABLE' ||
+              tierErr?.code === 503 ||
+              errMsg.includes('503') ||
+              errMsg.includes('UNAVAILABLE') ||
+              errMsg.includes('high demand');
+            if (isUnavailable) {
+              console.info(`[Gemini] Model ${modelsToTry[i]} experiencing high demand; trying next fallback model.`);
+              continue;
+            }
           }
         }
-      }
 
-      if (lastLlmError && aiDeals.length === 0) {
-        console.warn('[Gemini] Live AI search unavailable or rate-limited across models:', lastLlmError.message || lastLlmError);
+        if (aiDeals.length === 0) {
+          console.info('[Gemini] Live AI search unavailable or rate-limited; falling back to curated circular specials.');
+        }
+      } catch (error: any) {
+        console.info('[Gemini] Live Search fallback triggered: using curated store specials.');
       }
-    } catch (error: any) {
-      console.warn('[Gemini] Live Search error (falling back to curated specials):', error?.message || error);
     }
   }
 
@@ -1337,10 +1358,16 @@ Return ONLY a valid JSON array of deal objects matching DealItem schema.
   // Execute server-side Vision OCR enrichment on candidate deals
   let finalDeals = sanitizedCombinedDeals;
   if (ai && Array.isArray(finalDeals) && finalDeals.length > 0) {
-    try {
-      finalDeals = await enrichDealsWithOCR(ai, finalDeals);
-    } catch (ocrErr) {
-      console.warn('[GeminiService] enrichDealsWithOCR skipped due to error:', ocrErr);
+    if (Date.now() >= globalOcrCooldownUntil) {
+      try {
+        finalDeals = await enrichDealsWithOCR(ai, finalDeals);
+      } catch (ocrErr: any) {
+        const errMsg = ocrErr?.message || String(ocrErr);
+        if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota')) {
+          globalOcrCooldownUntil = Date.now() + 5 * 60 * 1000;
+        }
+        console.info('[GeminiService] enrichDealsWithOCR skipped; keeping standard circular data.');
+      }
     }
   }
 
@@ -1584,7 +1611,7 @@ Rules:
       storeLogoText: store.logoText,
     }));
   } catch (err) {
-    console.error('[Vision Pipeline] AI Flyer Extraction Failed:', err);
+    console.info('[Vision Pipeline] Flyer image extraction unavailable; using standard circular data.');
     return [];
   }
 }
@@ -1728,126 +1755,266 @@ export function extractSyntacticHeadNoun(rawTitle: string, brand?: string | null
   return { brandToken, modifiers, headNoun };
 }
 
-interface TaxonomicTarget {
-  commodityKey: string;
-  requiredDepartment: string;
+interface TaxonomicMatrix {
+  defaultKey: string;
+  overrides?: Record<string, string>;
 }
 
-const HEAD_NOUN_TAXONOMY: Record<string, TaxonomicTarget> = {
-  // Produce - Citrus individual fruit categories
-  'orange':      { commodityKey: 'produce_oranges', requiredDepartment: 'produce' },
-  'oranges':     { commodityKey: 'produce_oranges', requiredDepartment: 'produce' },
-  'mandarins':   { commodityKey: 'produce_oranges', requiredDepartment: 'produce' },
-  'clementines': { commodityKey: 'produce_oranges', requiredDepartment: 'produce' },
-  'lemon':       { commodityKey: 'produce_lemons', requiredDepartment: 'produce' },
-  'lemons':      { commodityKey: 'produce_lemons', requiredDepartment: 'produce' },
-  'lime':        { commodityKey: 'produce_limes', requiredDepartment: 'produce' },
-  'limes':       { commodityKey: 'produce_limes', requiredDepartment: 'produce' },
-  'grapefruit':  { commodityKey: 'produce_grapefruits', requiredDepartment: 'produce' },
-  'grapefruits': { commodityKey: 'produce_grapefruits', requiredDepartment: 'produce' },
-  // Produce - General commodities (no varietal fragmentation)
-  'apple':       { commodityKey: 'produce_apples', requiredDepartment: 'produce' },
-  'apples':      { commodityKey: 'produce_apples', requiredDepartment: 'produce' },
-  'banana':      { commodityKey: 'produce_bananas', requiredDepartment: 'produce' },
-  'bananas':     { commodityKey: 'produce_bananas', requiredDepartment: 'produce' },
-  'broccoli':    { commodityKey: 'produce_broccoli', requiredDepartment: 'produce' },
-  'corn':        { commodityKey: 'produce_corn', requiredDepartment: 'produce' },
-  'potato':      { commodityKey: 'produce_potatoes', requiredDepartment: 'produce' },
-  'potatoes':    { commodityKey: 'produce_potatoes', requiredDepartment: 'produce' },
-  'onion':       { commodityKey: 'produce_onions', requiredDepartment: 'produce' },
-  'onions':      { commodityKey: 'produce_onions', requiredDepartment: 'produce' },
-  'squash':      { commodityKey: 'produce_squash', requiredDepartment: 'produce' },
-  'grapes':      { commodityKey: 'produce_grapes_conventional', requiredDepartment: 'produce' },
-  'strawberries':{ commodityKey: 'produce_berries', requiredDepartment: 'produce' },
-  'blueberries': { commodityKey: 'produce_berries', requiredDepartment: 'produce' },
-  'raspberries': { commodityKey: 'produce_berries', requiredDepartment: 'produce' },
-  'blackberries':{ commodityKey: 'produce_berries', requiredDepartment: 'produce' },
-  // Meat & Seafood
-  'steak':       { commodityKey: 'meat_beef_steak', requiredDepartment: 'meat' },
-  'steaks':      { commodityKey: 'meat_beef_steak', requiredDepartment: 'meat' },
-  'beef':        { commodityKey: 'meat_beef_ground', requiredDepartment: 'meat' },
-  'chicken':     { commodityKey: 'meat_chicken_breast', requiredDepartment: 'meat' },
-  'wings':       { commodityKey: 'meat_chicken_wings', requiredDepartment: 'meat' },
-  'pork':        { commodityKey: 'meat_pork', requiredDepartment: 'meat' },
-  'ham':         { commodityKey: 'meat_pork', requiredDepartment: 'meat' },
-  'chops':       { commodityKey: 'meat_pork', requiredDepartment: 'meat' },
-  'ribs':        { commodityKey: 'meat_pork', requiredDepartment: 'meat' },
-  'bacon':       { commodityKey: 'meat_bacon', requiredDepartment: 'meat' },
-  'salmon':      { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
-  'shrimp':      { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
-  'fish':        { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
-  'tilapia':     { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
-  'cod':         { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
-  'crab':        { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
-  'lobster':     { commodityKey: 'meat_seafood', requiredDepartment: 'meat' },
+// 2D Matrix: Head Noun -> [Default Category, { Modifier Overrides }]
+// Scales infinitely without adding any procedural code logic.
+const TAXONOMY_MATRIX: Record<string, TaxonomicMatrix> = {
+  // Fruits
+  'apple': { defaultKey: 'produce_apples' },
+  'apples': { defaultKey: 'produce_apples' },
+  'banana': { defaultKey: 'produce_bananas' },
+  'bananas': { defaultKey: 'produce_bananas' },
+  'strawberry': { defaultKey: 'produce_strawberries' },
+  'strawberries': { defaultKey: 'produce_strawberries' },
+  'blueberry': { defaultKey: 'produce_blueberries' },
+  'blueberries': { defaultKey: 'produce_blueberries' },
+  'raspberry': { defaultKey: 'produce_cane_berries' },
+  'raspberries': { defaultKey: 'produce_cane_berries' },
+  'blackberry': { defaultKey: 'produce_cane_berries' },
+  'blackberries': { defaultKey: 'produce_cane_berries' },
+  'grape': { defaultKey: 'produce_grapes_conventional', overrides: { 'organic': 'produce_grapes_organic' } },
+  'grapes': { defaultKey: 'produce_grapes_conventional', overrides: { 'organic': 'produce_grapes_organic' } },
+  'orange': { defaultKey: 'produce_oranges' },
+  'oranges': { defaultKey: 'produce_oranges' },
+  'mandarin': { defaultKey: 'produce_oranges' },
+  'mandarins': { defaultKey: 'produce_oranges' },
+  'clementine': { defaultKey: 'produce_oranges' },
+  'clementines': { defaultKey: 'produce_oranges' },
+  'lemon': { defaultKey: 'produce_lemons' },
+  'lemons': { defaultKey: 'produce_lemons' },
+  'lime': { defaultKey: 'produce_limes' },
+  'limes': { defaultKey: 'produce_limes' },
+  'grapefruit': { defaultKey: 'produce_grapefruits' },
+  'grapefruits': { defaultKey: 'produce_grapefruits' },
+  'melon': { defaultKey: 'produce_melons' },
+  'melons': { defaultKey: 'produce_melons' },
+  'watermelon': { defaultKey: 'produce_melons' },
+  'watermelons': { defaultKey: 'produce_melons' },
+  'cantaloupe': { defaultKey: 'produce_melons' },
+  'cantaloupes': { defaultKey: 'produce_melons' },
+  'avocado': { defaultKey: 'produce_avocados' },
+  'avocados': { defaultKey: 'produce_avocados' },
+
+  // Vegetables
+  'potato': { 
+    defaultKey: 'produce_potatoes', 
+    overrides: { 'sweet': 'produce_sweet_potatoes', 'frozen': 'frozen_potatoes', 'fries': 'frozen_potatoes', 'tots': 'frozen_potatoes' } 
+  },
+  'potatoes': { 
+    defaultKey: 'produce_potatoes', 
+    overrides: { 'sweet': 'produce_sweet_potatoes', 'frozen': 'frozen_potatoes', 'fries': 'frozen_potatoes', 'tots': 'frozen_potatoes' } 
+  },
+  'onion': { defaultKey: 'produce_onions' },
+  'onions': { defaultKey: 'produce_onions' },
+  'broccoli': { defaultKey: 'produce_broccoli' },
+  'cauliflower': { defaultKey: 'produce_cauliflower' },
+  'carrot': { defaultKey: 'produce_carrots' },
+  'carrots': { defaultKey: 'produce_carrots' },
+  'celery': { defaultKey: 'produce_celery' },
+  'corn': { defaultKey: 'produce_corn' },
+  'lettuce': { defaultKey: 'produce_salad_greens' },
+  'spinach': { defaultKey: 'produce_salad_greens' },
+  'salad': { defaultKey: 'produce_salad_greens' },
+  'tomato': { defaultKey: 'produce_tomatoes' },
+  'tomatoes': { defaultKey: 'produce_tomatoes' },
+  'cucumber': { defaultKey: 'produce_cucumbers' },
+  'cucumbers': { defaultKey: 'produce_cucumbers' },
+  'pepper': { defaultKey: 'produce_peppers' },
+  'peppers': { defaultKey: 'produce_peppers' },
+  'squash': { defaultKey: 'produce_squash' },
+  'zucchini': { defaultKey: 'produce_squash' },
+  'mushroom': { defaultKey: 'produce_mushrooms' },
+  'mushrooms': { defaultKey: 'produce_mushrooms' },
+
+  // Meats & Proteins
+  'steak': { 
+    defaultKey: 'meat_beef_steak', 
+    overrides: { 'ham': 'meat_pork_ham', 'pork': 'meat_pork_ham', 'tuna': 'meat_seafood_salmon', 'salmon': 'meat_seafood_salmon', 'sauce': 'uncomparable', 'roll': 'uncomparable', 'rolls': 'uncomparable' } 
+  },
+  'steaks': { 
+    defaultKey: 'meat_beef_steak', 
+    overrides: { 'ham': 'meat_pork_ham', 'pork': 'meat_pork_ham', 'tuna': 'meat_seafood_salmon', 'salmon': 'meat_seafood_salmon', 'sauce': 'uncomparable', 'roll': 'uncomparable', 'rolls': 'uncomparable' } 
+  },
+  'beef': { defaultKey: 'meat_beef_ground' },
+  'chicken': { 
+    defaultKey: 'meat_chicken_breast',
+    overrides: { 'whole': 'meat_chicken_whole', 'roaster': 'meat_chicken_whole', 'wings': 'meat_chicken_wings', 'wing': 'meat_chicken_wings', 'thighs': 'meat_chicken_dark', 'drumsticks': 'meat_chicken_dark', 'legs': 'meat_chicken_dark' }
+  },
+  'pork': { defaultKey: 'meat_pork_chops' },
+  'chop': { defaultKey: 'meat_pork_chops' },
+  'chops': { defaultKey: 'meat_pork_chops' },
+  'roast': { defaultKey: 'meat_beef_roast', overrides: { 'pork': 'meat_pork_roast' } },
+  'rib': { defaultKey: 'meat_pork_ribs' },
+  'ribs': { defaultKey: 'meat_pork_ribs' },
+  'ham': { defaultKey: 'meat_pork_ham' },
+  'bacon': { defaultKey: 'meat_bacon' },
+  'sausage': { defaultKey: 'meat_sausage' },
+  'sausages': { defaultKey: 'meat_sausage' },
+  'turkey': { defaultKey: 'meat_turkey_ground' },
+
+  // Seafood
+  'salmon': { defaultKey: 'meat_seafood_salmon' },
+  'tilapia': { defaultKey: 'meat_seafood_whitefish' },
+  'cod': { defaultKey: 'meat_seafood_whitefish' },
+  'flounder': { defaultKey: 'meat_seafood_whitefish' },
+  'shrimp': { defaultKey: 'meat_seafood_shrimp' },
+  'crab': { defaultKey: 'meat_seafood_shellfish' },
+  'lobster': { defaultKey: 'meat_seafood_shellfish' },
+  'tuna': { defaultKey: 'pantry_seafood_canned' },
+
   // Dairy
-  'eggs':        { commodityKey: 'dairy_eggs', requiredDepartment: 'dairy' },
-  'cheese':      { commodityKey: 'dairy_cheese', requiredDepartment: 'dairy' },
-  'milk':        { commodityKey: 'dairy_milk_cow', requiredDepartment: 'dairy' },
-  'butter':      { commodityKey: 'dairy_butter_margarine', requiredDepartment: 'dairy' },
-  'margarine':   { commodityKey: 'dairy_butter_margarine', requiredDepartment: 'dairy' },
-  'yogurt':      { commodityKey: 'dairy_yogurt', requiredDepartment: 'dairy' },
-  // Pantry & Frozen
-  'cereal':      { commodityKey: 'pantry_cereal', requiredDepartment: 'pantry' },
-  'coffee':      { commodityKey: 'pantry_coffee', requiredDepartment: 'pantry' },
-  'pasta':       { commodityKey: 'pantry_pasta', requiredDepartment: 'pantry' },
-  'sauce':       { commodityKey: 'pantry_sauce', requiredDepartment: 'pantry' },
-  'chips':       { commodityKey: 'snacks_potato_chips', requiredDepartment: 'pantry' },
-  'pretzels':    { commodityKey: 'pantry_snacks', requiredDepartment: 'pantry' },
-  'cookies':     { commodityKey: 'pantry_snacks', requiredDepartment: 'pantry' },
-  'pizza':       { commodityKey: 'frozen_pizza', requiredDepartment: 'frozen' },
-  'ice cream':   { commodityKey: 'frozen_ice_cream', requiredDepartment: 'frozen' },
-  'waffles':     { commodityKey: 'frozen_waffles_pancakes', requiredDepartment: 'frozen' },
-  'pancakes':    { commodityKey: 'frozen_waffles_pancakes', requiredDepartment: 'frozen' },
+  'egg': { defaultKey: 'dairy_eggs' },
+  'eggs': { defaultKey: 'dairy_eggs' },
+  'milk': { 
+    defaultKey: 'dairy_milk_cow',
+    overrides: { 'oat': 'dairy_milk_plant', 'almond': 'dairy_milk_plant', 'soy': 'dairy_milk_plant', 'plant': 'dairy_milk_plant', 'cashew': 'dairy_milk_plant', 'coconut': 'dairy_milk_plant' }
+  },
+  'butter': { 
+    defaultKey: 'dairy_butter_margarine',
+    overrides: { 'peanut': 'pantry_nut_spreads', 'almond': 'pantry_nut_spreads', 'apple': 'pantry_nut_spreads', 'cookie': 'pantry_nut_spreads' }
+  },
+  'margarine': { defaultKey: 'dairy_butter_margarine' },
+  'cheese': { 
+    defaultKey: 'dairy_cheese_shredded',
+    overrides: { 'cream': 'dairy_cream_cheese', 'cottage': 'dairy_cottage_cheese', 'sliced': 'dairy_cheese_sliced_block', 'block': 'dairy_cheese_sliced_block', 'chunk': 'dairy_cheese_sliced_block' }
+  },
+  'yogurt': { defaultKey: 'dairy_yogurt' },
+  'cream': { 
+    defaultKey: 'dairy_cream', 
+    overrides: { 'sour': 'dairy_sour_cream', 'ice': 'frozen_ice_cream', 'heavy': 'dairy_cream', 'whipping': 'dairy_cream' } 
+  },
+  'creamer': { defaultKey: 'dairy_creamer' },
+  'creamers': { defaultKey: 'dairy_creamer' },
+
+  // Bakery
+  'bread': { 
+    defaultKey: 'bakery_bread_sandwich',
+    overrides: { 'artisan': 'bakery_bread_artisan', 'baguette': 'bakery_bread_artisan', 'sourdough': 'bakery_bread_artisan' }
+  },
+  'roll': { defaultKey: 'bakery_buns' },
+  'rolls': { defaultKey: 'bakery_buns' },
+  'bun': { defaultKey: 'bakery_buns' },
+  'buns': { defaultKey: 'bakery_buns' },
+  'bagel': { defaultKey: 'bakery_breakfast_breads' },
+  'bagels': { defaultKey: 'bakery_breakfast_breads' },
+  'muffin': { defaultKey: 'bakery_breakfast_breads' },
+  'muffins': { defaultKey: 'bakery_breakfast_breads' },
+  'tortilla': { defaultKey: 'bakery_tortillas' },
+  'tortillas': { defaultKey: 'bakery_tortillas' },
+
+  // Pantry
+  'pasta': { defaultKey: 'pantry_pasta' },
+  'sauce': { 
+    defaultKey: 'pantry_sauce_pasta',
+    overrides: { 'bbq': 'pantry_sauce_bbq', 'barbecue': 'pantry_sauce_bbq' }
+  },
+  'rice': { defaultKey: 'pantry_rice_grains' },
+  'bean': { defaultKey: 'pantry_beans_canned' },
+  'beans': { defaultKey: 'pantry_beans_canned' },
+  'soup': { defaultKey: 'pantry_soup_broth' },
+  'broth': { defaultKey: 'pantry_soup_broth' },
+  'cereal': { defaultKey: 'pantry_cereal' },
+  'oats': { defaultKey: 'pantry_oatmeal' },
+  'oatmeal': { defaultKey: 'pantry_oatmeal' },
+  'flour': { defaultKey: 'pantry_baking_basics' },
+  'sugar': { defaultKey: 'pantry_baking_basics' },
+  'oil': { defaultKey: 'pantry_cooking_oil' },
+  'coffee': { defaultKey: 'pantry_coffee' },
+  'pod': { defaultKey: 'pantry_coffee_pods' },
+  'pods': { defaultKey: 'pantry_coffee_pods' },
+
+  // Frozen
+  'pizza': { defaultKey: 'frozen_pizza' },
+  'pizzas': { defaultKey: 'frozen_pizza' },
+  'waffle': { defaultKey: 'frozen_waffles_pancakes' },
+  'waffles': { defaultKey: 'frozen_waffles_pancakes' },
+  'pancake': { defaultKey: 'frozen_waffles_pancakes' },
+  'pancakes': { defaultKey: 'frozen_waffles_pancakes' },
+  'meal': { defaultKey: 'frozen_meals' },
+  'meals': { defaultKey: 'frozen_meals' },
+
   // Beverages
-  'soda':        { commodityKey: 'beverages_soda', requiredDepartment: 'beverages' },
-  'water':       { commodityKey: 'beverages_water', requiredDepartment: 'beverages' },
-  'juice':       { commodityKey: 'beverages_juice', requiredDepartment: 'beverages' },
+  'water': { defaultKey: 'beverages_water' },
+  'soda': { 
+    defaultKey: 'beverages_soda_12pk',
+    overrides: { '2': 'beverages_soda_2liter', 'liter': 'beverages_soda_2liter' }
+  },
+  'cola': { 
+    defaultKey: 'beverages_soda_12pk',
+    overrides: { '2': 'beverages_soda_2liter', 'liter': 'beverages_soda_2liter' }
+  },
+  'juice': { 
+    defaultKey: 'beverages_juice_shelf',
+    overrides: { 'orange': 'beverages_juice_orange' }
+  },
+  'drink': { 
+    defaultKey: 'beverages_sports',
+    overrides: { 'energy': 'beverages_energy' }
+  },
+  'seltzer': { defaultKey: 'beverages_seltzer' },
+
+  // Snacks
+  'chip': { 
+    defaultKey: 'snacks_potato_chips',
+    overrides: { 'tortilla': 'snacks_tortilla_chips', 'corn': 'snacks_tortilla_chips' }
+  },
+  'chips': { 
+    defaultKey: 'snacks_potato_chips',
+    overrides: { 'tortilla': 'snacks_tortilla_chips', 'corn': 'snacks_tortilla_chips' }
+  },
+  'pretzel': { defaultKey: 'snacks_pretzels' },
+  'pretzels': { defaultKey: 'snacks_pretzels' },
+  'cracker': { defaultKey: 'snacks_crackers' },
+  'crackers': { defaultKey: 'snacks_crackers' },
+  'popcorn': { defaultKey: 'snacks_popcorn' },
+  'nut': { defaultKey: 'snacks_nuts' },
+  'nuts': { defaultKey: 'snacks_nuts' },
+  'peanut': { defaultKey: 'snacks_nuts' },
+  'peanuts': { defaultKey: 'snacks_nuts' },
+
+  // Household
+  'towel': { defaultKey: 'household_paper_towels' },
+  'towels': { defaultKey: 'household_paper_towels' },
+  'tissue': { defaultKey: 'household_bath_tissue' },
+  'paper': { 
+    defaultKey: 'household_paper_towels',
+    overrides: { 'toilet': 'household_bath_tissue', 'bath': 'household_bath_tissue' }
+  },
+  'detergent': { 
+    defaultKey: 'household_laundry_detergent_liquid',
+    overrides: { 'pods': 'household_laundry_detergent_pods', 'pacs': 'household_laundry_detergent_pods' }
+  },
+  'soap': { defaultKey: 'household_dish_liquid' },
+  'bag': { defaultKey: 'household_trash_bags' },
+  'bags': { defaultKey: 'household_trash_bags' },
+
+  // Hard Exclusions
+  'bites': { defaultKey: 'uncomparable' },
+  'mix': { defaultKey: 'uncomparable' },
+  'bowl': { defaultKey: 'uncomparable' },
+  'dinner': { defaultKey: 'uncomparable' }
 };
 
 export function classifyItemDeterministically(title: string, brand?: string | null, _description?: string | null): string {
   const { modifiers, headNoun } = extractSyntacticHeadNoun(title, brand);
 
-  // 1. Compound Modifier Disambiguation (Protects pork/ham steaks, peanut butter, etc.)
-  if (headNoun === 'steak' || headNoun === 'steaks') {
-    if (modifiers.includes('ham') || modifiers.includes('pork')) return 'meat_pork';
-    if (modifiers.includes('tuna') || modifiers.includes('salmon')) return 'meat_seafood';
-    if (modifiers.includes('sauce') || modifiers.includes('roll') || modifiers.includes('rolls')) return 'uncomparable';
-    return 'meat_beef_steak';
-  }
+  const entry = TAXONOMY_MATRIX[headNoun];
+  if (!entry) return 'uncomparable';
 
-  if (headNoun === 'butter') {
-    if (modifiers.includes('peanut') || modifiers.includes('almond') || modifiers.includes('apple') || modifiers.includes('cookie')) {
-      return 'pantry_snacks';
+  // Check for granular overrides based on modifiers without adding code logic
+  if (entry.overrides) {
+    for (const mod of modifiers) {
+      if (entry.overrides[mod]) {
+        return entry.overrides[mod];
+      }
     }
-    return 'dairy_butter_margarine';
   }
 
-  if (headNoun === 'sauce') {
-    if (modifiers.includes('marinara') || modifiers.includes('pasta') || modifiers.includes('spaghetti') || modifiers.includes('alfredo')) {
-      return 'pantry_sauce_pasta';
-    }
-    if (modifiers.includes('bbq') || modifiers.includes('barbecue')) {
-      return 'pantry_sauce_bbq';
-    }
-    return 'pantry_sauce';
-  }
-
-  if (headNoun === 'bites' || headNoun === 'mix' || headNoun === 'bowl' || headNoun === 'dinner') {
-    return 'uncomparable';
-  }
-
-  // 2. Direct Head Noun Lookup
-  const match = HEAD_NOUN_TAXONOMY[headNoun];
-  if (!match) return 'uncomparable';
-
-  // 3. Sub-family distinction within verified parent family
-  if (headNoun === 'grapes' && modifiers.includes('organic')) return 'produce_grapes_organic';
-  if (headNoun === 'milk' && (modifiers.includes('oat') || modifiers.includes('almond') || modifiers.includes('soy') || modifiers.includes('plant'))) {
-    return 'dairy_milk_plant';
-  }
-
-  return match.commodityKey;
+  return entry.defaultKey;
 }
 
 function cleanNounFallback(title: string): string {
@@ -1941,7 +2108,7 @@ Input items:
       let response;
       try {
         response = await ai.models.generateContent({
-          model: 'gemini-1.5-flash',
+          model: 'gemini-3.8-flash',
           contents: [promptTemplate + JSON.stringify(chunk, null, 2)],
           config: { responseMimeType: 'application/json', responseSchema: categoryBatchSchema, temperature: 0.0 },
         });
@@ -1966,8 +2133,8 @@ Input items:
       }
     } catch (err: any) {
       const errMsg = err?.message || String(err);
-      if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
-        globalBatchAiCooldownUntil = Date.now() + 60000;
+      if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota')) {
+        globalBatchAiCooldownUntil = Date.now() + 5 * 60 * 1000;
       }
       chunk.forEach((item) => {
         const detCat = classifyItemDeterministically(item.title, item.brand);

@@ -174,7 +174,7 @@ export default function DealComparisonView({
         >
           All Deals
         </button>
-        {Array.from(new Map(groups.map((g) => [g.genericProductGroup, g])).values()).map((group) => (
+        {filteredGroups.map((group) => (
           <button
             key={group.genericProductGroup}
             onClick={() => setActiveFilter(activeFilter === group.genericProductGroup ? null : group.genericProductGroup)}

@@ -24,9 +24,9 @@ import FlyerUploadModal from './components/FlyerUploadModal';
 import NotificationOptInBanner from './components/NotificationOptInBanner';
 import CircularLoadingProgress from './components/CircularLoadingProgress';
 
-const STORAGE_KEY_LOCATION = 'grocery_circulars_location_v2';
-const STORAGE_KEY_RADIUS = 'grocery_circulars_radius_v2';
-const STORAGE_KEY_LIST = 'grocery_circulars_shopping_list_v2';
+const STORAGE_KEY_LOCATION = 'grocery_circulars_location_v3';
+const STORAGE_KEY_RADIUS = 'grocery_circulars_radius_v3';
+const STORAGE_KEY_LIST = 'grocery_circulars_shopping_list_v3';
 
 const DEFAULT_LOCATION: UserLocation = {
   latitude: 40.2137,
@@ -67,8 +67,8 @@ export default function App() {
     }
   });
 
-  const STORAGE_KEY_STORES = 'dealscout_cached_stores_v2';
-  const STORAGE_KEY_DEALS = 'dealscout_cached_deals_v2';
+  const STORAGE_KEY_STORES = 'dealscout_cached_stores_v3';
+  const STORAGE_KEY_DEALS = 'dealscout_cached_deals_v3';
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('circulars');
   const [stores, setStores] = useState<Store[]>(() => {
@@ -508,7 +508,7 @@ export default function App() {
         {/* --- TEMPORARY EXPORT BAR (DELETE AFTER TESTING) --- */}
         <div className="m-4 p-4 bg-slate-900 rounded-xl shadow-lg border border-slate-700 flex flex-col gap-3">
           <div className="flex items-center justify-between text-white text-xs font-bold uppercase tracking-wider">
-            <span>Debug Data Exporter <span className="text-emerald-400 font-mono text-[10px] ml-1 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">v4.3.0</span> ({Array.isArray(deals) ? deals.length : 0} items)</span>
+            <span>Debug Data Exporter <span className="text-emerald-400 font-mono text-[10px] ml-1 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">v4.6.0</span> ({Array.isArray(deals) ? deals.length : 0} items)</span>
             {exportFeedback && (
               <span className="text-emerald-400 font-medium normal-case text-[11px] animate-pulse">
                 {exportFeedback}
