@@ -32,8 +32,8 @@ const CATEGORY_UOM_CONTRACT: Record<string, string> = {
   "dairy_cream": "fl oz", "dairy_creamer": "fl oz",
 
   // Bakery & Deli
-  "bakery_bread_sandwich": "each", "bakery_bread_artisan": "each", "bakery_breakfast_breads": "each", 
-  "bakery_buns": "each", "bakery_tortillas": "each", "deli_cold_cuts": "lb",
+  "bakery_bread_sandwich": "each", "bakery_bread_artisan": "each", "bakery_breakfast_breads": "pkg", 
+  "bakery_buns": "pkg", "bakery_tortillas": "each", "deli_cold_cuts": "lb",
 
   // Pantry (By the Ounce)
   "pantry_pasta": "oz", "pantry_sauce_pasta": "oz", "pantry_sauce_bbq": "oz", "pantry_rice_grains": "lb", 
@@ -46,7 +46,7 @@ const CATEGORY_UOM_CONTRACT: Record<string, string> = {
   "frozen_ice_cream": "fl oz", "frozen_potatoes": "oz", "frozen_meals": "each",
 
   // Beverages
-  "beverages_water": "each", "beverages_soda_12pk": "each", "beverages_soda_2liter": "each", 
+  "beverages_water": "each", "beverages_soda_12pk": "pkg", "beverages_soda_2liter": "each", 
   "beverages_juice_orange": "fl oz", "beverages_juice_shelf": "fl oz", "beverages_sports": "fl oz", 
   "beverages_energy": "each", "beverages_seltzer": "each",
 
@@ -108,6 +108,19 @@ export function sanitizeDealItem(deal: any): DealItem {
     unitDescription = 'Discount applied at checkout';
   }
 
+  const origPrice = typeof deal.originalPrice === 'number' ? deal.originalPrice : parseFloat(String(deal.originalPrice || '0').replace(/[^0-9.]/g, '')) || 0;
+
+  // Hard clamp on hallucinated bundle quantities (e.g. 80/20 beef parsed as 80 items)
+  if (bundleQuantity && bundleQuantity > 12) {
+    bundleQuantity = undefined;
+    bundleTotalPrice = undefined;
+    dealType = 'sale';
+    // Recover salePrice if it was crushed by a massive division
+    if (salePrice < 0.50 && origPrice > 1.00) {
+      salePrice = origPrice;
+    }
+  }
+
   // 3. Strict UOM Contract Enforcement & Division
   const targetUOM = CATEGORY_UOM_CONTRACT[deal.genericProductGroup || ''] || 'each';
   let finalUnitCost = salePrice;
@@ -116,8 +129,17 @@ export function sanitizeDealItem(deal: any): DealItem {
 
   if (!isUnpricedPromo) {
     if (targetUOM === 'each') {
-      finalUnitCost = salePrice;
-      displayUnitPrice = `$${salePrice.toFixed(2)} each`;
+      // Hunt for multi-packs to divide down to the true single 'each' price
+      const countMatch = corpus.match(/(\d+)\s*(?:ct|count|pk|pack|pack\b|pk\b)/i) || corpus.match(/(?:pack of|box of)\s*(\d+)/i);
+      if (countMatch && parseInt(countMatch[1], 10) > 1 && parseInt(countMatch[1], 10) < 50) {
+        const count = parseInt(countMatch[1], 10);
+        finalUnitCost = Number((salePrice / count).toFixed(4));
+        displayUnitPrice = `$${finalUnitCost.toFixed(2)} each`;
+        unitDescription = `${count}-pack ($${salePrice.toFixed(2)} total)`;
+      } else {
+        finalUnitCost = salePrice;
+        displayUnitPrice = `$${salePrice.toFixed(2)} each`;
+      }
     } else {
       // Check if price is ALREADY presented per target unit (e.g., "$3.99 / lb")
       const explicitUnitRegex = new RegExp(`(\\/|per)\\s*${targetUOM}`, 'i');
@@ -173,7 +195,6 @@ export function sanitizeDealItem(deal: any): DealItem {
     displayUnitPrice = 'Free / Promo';
   }
 
-  const origPrice = typeof deal.originalPrice === 'number' ? deal.originalPrice : parseFloat(String(deal.originalPrice || '0').replace(/[^0-9.]/g, '')) || 0;
   const originalPrice = origPrice > salePrice ? origPrice : salePrice;
   const discountPercent = originalPrice > salePrice && !isUnpricedPromo ? Math.round(((originalPrice - salePrice) / originalPrice) * 100) : 0;
 

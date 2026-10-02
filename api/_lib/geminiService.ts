@@ -521,8 +521,10 @@ async function ocrVerifyDealTile(
               {
                 text: `Analyze this grocery store circular ad image tile with high-accuracy OCR:
 1. Examine all visual text, yellow/red badges, bursts, banners, and price stamps.
-2. Check for multi-buys (e.g., "2 for $10", "2 for $4", "3 for $5", "4 for $10", "10 for $10").
-   - If found:
+2. Check for multi-buys (e.g., "2 for $10", "2 for $4", "3 for $5").
+   - EXCLUSION RULE: NEVER parse meat fat ratios like "80/20", "85/15", "93/7" as bundles!
+   - bundleQuantity MUST be 12 or less.
+   - If valid multi-buy found:
      bundleQuantity: the integer count (e.g., 2)
      bundleTotalPrice: the total bundle cost (e.g., 10.00)
      unitSalePrice: bundleTotalPrice / bundleQuantity (e.g., 5.00)
@@ -1388,6 +1390,9 @@ Return ONLY a valid JSON array of deal objects matching DealItem schema.
     }
   });
 
+  // CRITICAL: Re-run the UOM Math contract as the final step to lock in AI category & price modifications
+  finalDeals = finalDeals.map(sanitizeDealItem);
+
   // Update store deal counters with final counts
   const counts: Record<string, number> = {};
   finalDeals.forEach((d) => {
@@ -2001,6 +2006,15 @@ const TAXONOMY_MATRIX: Record<string, TaxonomicMatrix> = {
 
 export function classifyItemDeterministically(title: string, brand?: string | null, _description?: string | null): string {
   const { modifiers, headNoun } = extractSyntacticHeadNoun(title, brand);
+
+  // 0. Global Processed & Canned Exclusions
+  const processedModifiers = ['roasted', 'canned', 'jar', 'jarred', 'pickled', 'diced', 'crushed', 'paste', 'puree', 'sun-dried'];
+  if (modifiers.some(m => processedModifiers.includes(m))) {
+     if (headNoun.includes('tomato')) return 'pantry_tomatoes_canned';
+     if (headNoun === 'pepper' || headNoun === 'peppers' || headNoun === 'mushroom' || headNoun === 'mushrooms' || headNoun === 'onion' || headNoun === 'onions') {
+       return 'uncomparable'; 
+     }
+  }
 
   const entry = TAXONOMY_MATRIX[headNoun];
   if (!entry) return 'uncomparable';

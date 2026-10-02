@@ -508,7 +508,7 @@ export default function App() {
         {/* --- TEMPORARY EXPORT BAR (DELETE AFTER TESTING) --- */}
         <div className="m-4 p-4 bg-slate-900 rounded-xl shadow-lg border border-slate-700 flex flex-col gap-3">
           <div className="flex items-center justify-between text-white text-xs font-bold uppercase tracking-wider">
-            <span>Debug Data Exporter <span className="text-emerald-400 font-mono text-[10px] ml-1 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">v4.6.0</span> ({Array.isArray(deals) ? deals.length : 0} items)</span>
+            <span>Debug Data Exporter <span className="text-emerald-400 font-mono text-[10px] ml-1 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">v4.6.5</span> ({Array.isArray(deals) ? deals.length : 0} items)</span>
             {exportFeedback && (
               <span className="text-emerald-400 font-medium normal-case text-[11px] animate-pulse">
                 {exportFeedback}
