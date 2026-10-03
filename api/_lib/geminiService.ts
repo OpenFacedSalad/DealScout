@@ -1088,9 +1088,8 @@ export async function getCircularsForLocation(
     return cached.data;
   }
 
-  // 1. Strict Haversine Distance Calculation
   function getDistanceMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
-    const R = 3958.8; // Earth radius in miles
+    const R = 3958.8; 
     const dLat = (lat2 - lat1) * (Math.PI / 180);
     const dLon = (lon2 - lon1) * (Math.PI / 180);
     const a =
@@ -1099,33 +1098,28 @@ export async function getCircularsForLocation(
     return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
   }
 
-  // 2. Discover physical grocery stores via OSM
   let osmStores: Store[] = [];
   try {
-    const timeoutPromise = new Promise<Store[]>((_, reject) =>
-      setTimeout(() => reject(new Error('OSM POI timeout')), 8000)
-    );
-    osmStores = await Promise.race([
-      findPhysicalGroceryStoresOSM(lat, lng, radiusMiles),
-      timeoutPromise,
-    ]);
+    const timeoutPromise = new Promise<Store[]>((_, reject) => setTimeout(() => reject(new Error('OSM timeout')), 8000));
+    osmStores = await Promise.race([findPhysicalGroceryStoresOSM(lat, lng, radiusMiles), timeoutPromise]);
   } catch (err: any) {
-    console.info('[GeminiService] OSM discovery fallback:', err?.message || err);
+    console.info('[GeminiService] OSM fallback:', err?.message || err);
   }
 
-  // 3. Optional Regional Defaults ONLY IF within strict radius miles
   const regionalStores = getRegionalDefaultStores(city, state, lat, lng, radiusMiles);
   const candidateStores = [...regionalStores, ...osmStores];
-
-  // 4. Strict Geographic Filtering: Drop any store exceeding the search radius
   const uniqueStoreMap = new Map<string, Store>();
+  
   for (const s of candidateStores) {
     if (!s || !s.id) continue;
     const chainKey = (s.chain || s.name).toLowerCase().replace(/[^a-z0-9]/g, '');
     
-    // Compute true distance from search epicenter
-    s.distanceMiles = (s.latitude && s.longitude)
-      ? getDistanceMiles(lat, lng, s.latitude, s.longitude)
+    // Safely pull latitude/longitude regardless of object key naming
+    const storeLat = s.latitude ?? (s as any).lat;
+    const storeLng = s.longitude ?? (s as any).lng;
+    
+    s.distanceMiles = (storeLat !== undefined && storeLng !== undefined)
+      ? getDistanceMiles(lat, lng, storeLat, storeLng)
       : 9999;
 
     if (s.distanceMiles <= radiusMiles) {
@@ -1136,23 +1130,17 @@ export async function getCircularsForLocation(
   }
 
   const storesWithinRadius = Array.from(uniqueStoreMap.values());
-  if (storesWithinRadius.length === 0) {
-    return { stores: [], deals: [] };
-  }
+  if (storesWithinRadius.length === 0) return { stores: [], deals: [] };
 
-  // 5. Ingest Authentic Live Deals (Karns Scraper)
   let karnsDeals: DealItem[] = [];
   const karnsStore = storesWithinRadius.find((s) => (s?.name || '').toLowerCase().includes('karns') || (s?.chain || '').toLowerCase().includes('karns'));
   if (karnsStore) {
     try {
       karnsDeals = await getFullKarnsCircularDeals(karnsStore);
       karnsStore.totalDealsCount = karnsDeals.length;
-    } catch (err) {
-      console.warn('[GeminiService] Error fetching full Karns circular:', err);
-    }
+    } catch (err) {}
   }
 
-  // 6. Ingest Authentic Live Deals (Flipp & Direct Scrapers)
   const otherStores = storesWithinRadius.filter((s) => s !== karnsStore);
   const liveDealsByStore = new Map<string, DealItem[]>();
 
@@ -1160,46 +1148,75 @@ export async function getCircularsForLocation(
     otherStores.map(async (s) => {
       try {
         const liveItems = await fetchLiveDealsForStore(s, zipCode);
-        if (liveItems && liveItems.length > 0) {
-          liveDealsByStore.set(s.id, liveItems);
-          s.totalDealsCount = liveItems.length;
-        } else {
-          s.totalDealsCount = 0;
-        }
-      } catch (err) {
-        console.warn(`[GeminiService] Error in fetchLiveDealsForStore for ${s.name}:`, err);
-        s.totalDealsCount = 0;
-      }
+        if (liveItems && liveItems.length > 0) liveDealsByStore.set(s.id, liveItems);
+      } catch (err) {}
     })
   );
 
-  // 7. ZERO-TOLERANCE FILTER: ONLY retain stores with REAL circular items
-  // Under NO circumstances call any fallback deal generator. If a store has no deals, it has 0 deals.
+  const storesNeedingDeals = otherStores.filter((s) => !liveDealsByStore.has(s.id));
+  let aiDeals: DealItem[] = [];
+  const ai = getAiClient();
+
+  if (storesNeedingDeals.length > 0 && ai) {
+    try {
+      const storeSummary = storesNeedingDeals.map((s) => ({ id: s.id, name: s.name, address: `${s.address}, ${s.city}` }));
+      const currentDate = new Date().toISOString().split('T')[0];
+      const searchInstructions = storesNeedingDeals.map((s) => `- ${s.name}: "${s.name} ${city} ${state} weekly ad circular deals"`).join('\n');
+
+      const prompt = `Based on current weekly grocery circulars, flyers, and advertised specials for supermarkets near ${city}, ${state} ${zipCode} active as of ${currentDate}:
+Specifically, search for:
+${searchInstructions}
+Target Supermarkets:
+${JSON.stringify(storeSummary, null, 2)}
+CRITICAL INSTRUCTIONS:
+1. Extract REAL advertised items and prices. Do NOT invent prices.
+2. If a store has NO advertised deals online, DO NOT invent them.
+3. Map to exactly one allowed product key.
+Return ONLY a valid JSON array of deal objects matching the schema.`;
+
+      const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+      for (let i = 0; i < modelsToTry.length; i++) {
+        try {
+          const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('AI Timeout')), 15000));
+          const result = (await Promise.race([
+            ai.models.generateContent({ model: modelsToTry[i], contents: prompt, config: { responseMimeType: 'application/json', responseSchema: dealsResponseSchema, temperature: 0.1 } }),
+            timeoutPromise,
+          ])) as any;
+          if (result?.text && result.text.trim()) {
+            const parsed = parseJsonFromText<DealItem[]>(result.text, []);
+            if (Array.isArray(parsed) && parsed.length > 0) { aiDeals = parsed; break; }
+          }
+        } catch (err) {}
+      }
+    } catch (err) {}
+  }
+
   const authenticDeals: DealItem[] = [...karnsDeals];
   const activeStores: Store[] = [];
 
-  if (karnsStore && karnsDeals.length > 0) {
-    activeStores.push(karnsStore);
-  }
+  if (karnsStore && karnsDeals.length > 0) activeStores.push(karnsStore);
 
   for (const store of otherStores) {
     const dealsForStore = liveDealsByStore.get(store.id);
     if (dealsForStore && dealsForStore.length > 0) {
       authenticDeals.push(...dealsForStore);
       activeStores.push(store);
+    } else {
+      const matchingAi = aiDeals.filter((d) => d.storeId === store.id || d.storeName?.toLowerCase().includes(store.name.toLowerCase()));
+      if (matchingAi.length > 0) {
+        matchingAi.forEach((d) => { d.storeId = store.id; d.storeName = store.name; d.storeLogoBg = store.logoBg; d.storeLogoText = store.logoText; });
+        authenticDeals.push(...matchingAi);
+        activeStores.push(store);
+      }
     }
   }
 
-  // Ensure unique deal IDs
   const seenDealIds = new Set<string>();
   authenticDeals.forEach((d, idx) => {
-    if (!d.id || seenDealIds.has(d.id)) {
-      d.id = `${d.storeId || 'deal'}-${idx + 1}-${Date.now()}`;
-    }
+    if (!d.id || seenDealIds.has(d.id)) d.id = `${d.storeId || 'deal'}-${idx + 1}-${Date.now()}`;
     seenDealIds.add(d.id);
   });
 
-  // 8. Deterministic Syntactic Categorization on Authentic Deals ONLY
   const categorizedDeals = authenticDeals.map((d) => {
     const localCat = classifyItemDeterministically(d.title, d.brand);
     const { headNoun } = extractSyntacticHeadNoun(d.title, d.brand);
@@ -1209,17 +1226,12 @@ export async function getCircularsForLocation(
     return d;
   });
 
-  // 9. Standardize Unit Pricing Contract
+  // Safe standard call using top-level import
   const finalDeals = sanitizeDealList(categorizedDeals);
 
-  // 10. Update Store Counts
   const counts: Record<string, number> = {};
-  finalDeals.forEach((d) => {
-    counts[d.storeId] = (counts[d.storeId] || 0) + 1;
-  });
-  activeStores.forEach((s) => {
-    s.totalDealsCount = counts[s.id] || 0;
-  });
+  finalDeals.forEach((d) => { counts[d.storeId] = (counts[d.storeId] || 0) + 1; });
+  activeStores.forEach((s) => { s.totalDealsCount = counts[s.id] || 0; });
 
   const result = { stores: activeStores, deals: finalDeals };
   circularsCache.set(cacheKey, { timestamp: Date.now(), data: result });
