@@ -1191,32 +1191,38 @@ Return ONLY a valid JSON array of deal objects matching the schema.`;
     } catch (err) {}
   }
 
+  // 8. COMPILE AUTHENTIC DEALS (NO MOCK DATA)
   const authenticDeals: DealItem[] = [...karnsDeals];
-  const activeStores: Store[] = [];
-
-  if (karnsStore && karnsDeals.length > 0) activeStores.push(karnsStore);
 
   for (const store of otherStores) {
     const dealsForStore = liveDealsByStore.get(store.id);
     if (dealsForStore && dealsForStore.length > 0) {
       authenticDeals.push(...dealsForStore);
-      activeStores.push(store);
     } else {
+      // Check if AI Web Search found authentic deals
       const matchingAi = aiDeals.filter((d) => d.storeId === store.id || d.storeName?.toLowerCase().includes(store.name.toLowerCase()));
       if (matchingAi.length > 0) {
-        matchingAi.forEach((d) => { d.storeId = store.id; d.storeName = store.name; d.storeLogoBg = store.logoBg; d.storeLogoText = store.logoText; });
+        matchingAi.forEach((d) => {
+          d.storeId = store.id;
+          d.storeName = store.name;
+          d.storeLogoBg = store.logoBg;
+          d.storeLogoText = store.logoText;
+        });
         authenticDeals.push(...matchingAi);
-        activeStores.push(store);
       }
     }
   }
 
+  // Ensure unique deal IDs
   const seenDealIds = new Set<string>();
   authenticDeals.forEach((d, idx) => {
-    if (!d.id || seenDealIds.has(d.id)) d.id = `${d.storeId || 'deal'}-${idx + 1}-${Date.now()}`;
+    if (!d.id || seenDealIds.has(d.id)) {
+      d.id = `${d.storeId || 'deal'}-${idx + 1}-${Date.now()}`;
+    }
     seenDealIds.add(d.id);
   });
 
+  // 9. Deterministic Syntactic Categorization on Authentic Deals ONLY
   const categorizedDeals = authenticDeals.map((d) => {
     const localCat = classifyItemDeterministically(d.title, d.brand);
     const { headNoun } = extractSyntacticHeadNoun(d.title, d.brand);
@@ -1226,14 +1232,21 @@ Return ONLY a valid JSON array of deal objects matching the schema.`;
     return d;
   });
 
-  // Safe standard call using top-level import
+  // 10. Standardize Unit Pricing Contract
   const finalDeals = sanitizeDealList(categorizedDeals);
 
+  // 11. Update Store Counts & RETURN ALL STORES
+  // We MUST return storesWithinRadius so the UI can display the "No Circular Found" banner for empty stores.
   const counts: Record<string, number> = {};
-  finalDeals.forEach((d) => { counts[d.storeId] = (counts[d.storeId] || 0) + 1; });
-  activeStores.forEach((s) => { s.totalDealsCount = counts[s.id] || 0; });
+  finalDeals.forEach((d) => {
+    counts[d.storeId] = (counts[d.storeId] || 0) + 1;
+  });
+  
+  storesWithinRadius.forEach((s) => {
+    s.totalDealsCount = counts[s.id] || 0;
+  });
 
-  const result = { stores: activeStores, deals: finalDeals };
+  const result = { stores: storesWithinRadius, deals: finalDeals };
   circularsCache.set(cacheKey, { timestamp: Date.now(), data: result });
   return result;
 }

@@ -139,12 +139,12 @@ export default function App() {
       setIsLoading(true);
       setError(null);
 
-      // Strict 25-second timeout. If the backend hasn't returned local math by now, it's dead.
+      // Strict 45-second timeout. Allows 8s for OSM discovery + 20s for AI Web Search on independent grocers.
       let timedOut = false;
       const timeoutId = setTimeout(() => {
         timedOut = true;
         controller.abort();
-      }, 25000);
+      }, 45000);
 
       const payload = {
         lat: targetLocation?.latitude ?? 40.2137,
@@ -508,7 +508,7 @@ export default function App() {
         {/* --- TEMPORARY EXPORT BAR (DELETE AFTER TESTING) --- */}
         <div className="m-4 p-4 bg-slate-900 rounded-xl shadow-lg border border-slate-700 flex flex-col gap-3">
           <div className="flex items-center justify-between text-white text-xs font-bold uppercase tracking-wider">
-            <span>Debug Data Exporter <span className="text-emerald-400 font-mono text-[10px] ml-1 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">v4.9.1</span> ({Array.isArray(deals) ? deals.length : 0} items)</span>
+            <span>Debug Data Exporter <span className="text-emerald-400 font-mono text-[10px] ml-1 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">v4.9.6</span> ({Array.isArray(deals) ? deals.length : 0} items)</span>
             {exportFeedback && (
               <span className="text-emerald-400 font-medium normal-case text-[11px] animate-pulse">
                 {exportFeedback}
