@@ -431,25 +431,25 @@ export default function CircularsView({
       </div>
 
       {displayedDeals.length === 0 ? (
-        <div id="deals-container" className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
-          <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400 mb-3">
-            <Search className="w-6 h-6" />
-          </div>
-          <h3 className="text-base font-bold text-slate-800">No matching circular deals found</h3>
-          <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-            Try adjusting your search query, switching stores, or resetting category and promotion filters.
+        <div id="deals-container" className="text-center py-16 px-4 bg-white rounded-2xl border border-dashed border-slate-300 my-6 shadow-xs">
+          <div className="text-3xl mb-3">🏷️</div>
+          <h3 className="text-base font-bold text-slate-800 mb-1">No Active Circular Found</h3>
+          <p className="text-xs text-slate-500 max-w-sm mx-auto">
+            This store does not currently publish a digital weekly flyer on Flipp or online. Check back on Wednesday when new ad circulars release.
           </p>
-          <button
-            onClick={() => {
-              setSearchQuery('');
-              setSelectedCategory('all');
-              setPromoFilter('all');
-              setSelectedStoreId('all');
-            }}
-            className="mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition"
-          >
-            Reset All Filters
-          </button>
+          {(selectedCategory !== 'all' || promoFilter !== 'all' || searchQuery !== '') && (
+            <button
+              onClick={() => {
+                setSearchQuery('');
+                setSelectedCategory('all');
+                setPromoFilter('all');
+                setSelectedStoreId('all');
+              }}
+              className="mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition"
+            >
+              Reset All Filters
+            </button>
+          )}
         </div>
       ) : (
         <div id="deals-container" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6 pb-20">

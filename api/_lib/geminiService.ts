@@ -4,7 +4,7 @@ import { Store, DealItem } from '../../src/types.js';
 import { findPhysicalGroceryStoresOSM, getRegionalDefaultStores } from './storeFinder.js';
 import { getFullKarnsCircularDeals } from './karnsScraper.js';
 import { fetchLiveDealsForStore } from './liveCircularScraper.js';
-import { sanitizeDealItem } from './dealPricing.js';
+import { sanitizeDealItem, sanitizeDealList } from './dealPricing.js';
 
 let aiClient: GoogleGenAI | null = null;
 
@@ -1088,11 +1088,19 @@ export async function getCircularsForLocation(
     return cached.data;
   }
 
-  let stores: Store[] = [];
+  // 1. Strict Haversine Distance Calculation
+  function getDistanceMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 3958.8; // Earth radius in miles
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+  }
 
-  const regionalStores = getRegionalDefaultStores(city, state, lat, lng, radiusMiles);
+  // 2. Discover physical grocery stores via OSM
   let osmStores: Store[] = [];
-
   try {
     const timeoutPromise = new Promise<Store[]>((_, reject) =>
       setTimeout(() => reject(new Error('OSM POI timeout')), 8000)
@@ -1102,45 +1110,52 @@ export async function getCircularsForLocation(
       timeoutPromise,
     ]);
   } catch (err: any) {
-    console.info('[GeminiService] OSM discovery fallback to regional directory:', err?.message || err);
+    console.info('[GeminiService] OSM discovery fallback:', err?.message || err);
   }
 
-  // Prioritize primary regional supermarkets, followed by OSM discovered stores
-  stores = [...regionalStores, ...osmStores];
+  // 3. Optional Regional Defaults ONLY IF within strict radius miles
+  const regionalStores = getRegionalDefaultStores(city, state, lat, lng, radiusMiles);
+  const candidateStores = [...regionalStores, ...osmStores];
 
-  // Deduplicate stores by ID and distinct chain key (keeping closest)
+  // 4. Strict Geographic Filtering: Drop any store exceeding the search radius
   const uniqueStoreMap = new Map<string, Store>();
-  const seenChains = new Set<string>();
-
-  for (const s of stores) {
+  for (const s of candidateStores) {
     if (!s || !s.id) continue;
     const chainKey = (s.chain || s.name).toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (seenChains.has(chainKey)) continue;
-    seenChains.add(chainKey);
-    uniqueStoreMap.set(s.id, s);
-  }
-  stores = (Array.from(uniqueStoreMap.values()) || []).filter((s) => (s?.distanceMiles ?? 0) <= radiusMiles);
+    
+    // Compute true distance from search epicenter
+    s.distanceMiles = (s.latitude && s.longitude)
+      ? getDistanceMiles(lat, lng, s.latitude, s.longitude)
+      : 9999;
 
-  if (stores.length === 0) {
+    if (s.distanceMiles <= radiusMiles) {
+      if (!uniqueStoreMap.has(chainKey) || (uniqueStoreMap.get(chainKey)!.distanceMiles || 999) > s.distanceMiles) {
+        uniqueStoreMap.set(chainKey, s);
+      }
+    }
+  }
+
+  const storesWithinRadius = Array.from(uniqueStoreMap.values());
+  if (storesWithinRadius.length === 0) {
     return { stores: [], deals: [] };
   }
 
-  // Always fetch the complete, authentic Karns circular (all 226 items)
+  // 5. Ingest Authentic Live Deals (Karns Scraper)
   let karnsDeals: DealItem[] = [];
-  const karnsStore = stores.find((s) => (s?.name || '').toLowerCase().includes('karns') || (s?.chain || '').toLowerCase().includes('karns'));
+  const karnsStore = storesWithinRadius.find((s) => (s?.name || '').toLowerCase().includes('karns') || (s?.chain || '').toLowerCase().includes('karns'));
   if (karnsStore) {
     try {
       karnsDeals = await getFullKarnsCircularDeals(karnsStore);
       karnsStore.totalDealsCount = karnsDeals.length;
     } catch (err) {
-      console.warn('[GeminiService] Error fetching full Karns circular, falling back:', err);
+      console.warn('[GeminiService] Error fetching full Karns circular:', err);
     }
   }
 
-  const otherStores = stores.filter((s) => s !== karnsStore);
-
-  // Fetch real, live circular items for other stores (ALDI, Giant, The Fresh Market, Trader Joe's, Weis, etc.)
+  // 6. Ingest Authentic Live Deals (Flipp & Direct Scrapers)
+  const otherStores = storesWithinRadius.filter((s) => s !== karnsStore);
   const liveDealsByStore = new Map<string, DealItem[]>();
+
   await Promise.all(
     otherStores.map(async (s) => {
       try {
@@ -1148,261 +1163,65 @@ export async function getCircularsForLocation(
         if (liveItems && liveItems.length > 0) {
           liveDealsByStore.set(s.id, liveItems);
           s.totalDealsCount = liveItems.length;
+        } else {
+          s.totalDealsCount = 0;
         }
       } catch (err) {
         console.warn(`[GeminiService] Error in fetchLiveDealsForStore for ${s.name}:`, err);
+        s.totalDealsCount = 0;
       }
     })
   );
 
-  // Check if any stores need AI circular search
-  const storesNeedingDeals = otherStores.filter((s) => !liveDealsByStore.has(s.id) || (liveDealsByStore.get(s.id)?.length || 0) === 0);
-
-  let aiDeals: DealItem[] = [];
-  const ai = getAiClient();
-
-  if (storesNeedingDeals.length > 0 && ai) {
-    if (Date.now() < globalAiSearchCooldownUntil) {
-      console.info('[Gemini] Live AI search in cooldown; using curated circular specials fallback.');
-    } else {
-      try {
-        const storeSummary = storesNeedingDeals.map((s) => ({
-          id: s.id,
-          name: s.name,
-          chain: s.chain,
-          address: `${s.address}, ${s.city}`,
-        }));
-
-        const currentDate = new Date().toISOString().split('T')[0];
-        const searchInstructions = storesNeedingDeals.map((s) => {
-          return `- ${s.name}: "${s.name} ${city} ${state} weekly ad circular deals"`;
-        }).join('\n');
-
-        const prompt = `
-Based on current weekly grocery circulars, flyers, and advertised specials for supermarkets near ${city}, ${state} ${zipCode} active as of ${currentDate}:
-
-Specifically, search for:
-${searchInstructions}
-
-Target Supermarkets:
-${JSON.stringify(storeSummary, null, 2)}
-
-CRITICAL INSTRUCTIONS:
-1. Extract REAL advertised items and prices. Do NOT invent prices.
-2. DICTIONARY MAPPING (CRITICAL): 
-   - You MUST first deconstruct the item into "flavorOrBrand" and "coreBaseNoun".
-   - Your final "genericProductGroup" MUST be selected based ONLY on the "coreBaseNoun", entirely ignoring the "flavorOrBrand".
-   - Example: "Strawberry Prebiotic Soda" -> flavorOrBrand: "Strawberry Prebiotic", coreBaseNoun: "Soda". Maps to "beverages_soda".
-   - Example: "Butternut Squash" -> flavorOrBrand: "Butternut", coreBaseNoun: "Squash". Maps to "produce_squash".
-
-   Map to EXACTLY ONE string from this Allowed Product Keys array:
-   ${JSON.stringify(STRICT_COMMODITY_KEYS, null, 2)}
-3. Math & Normalization: You must populate "normalizedUnitType" with EXACTLY one of these values: "lb", "oz", "dozen", "pkg", or "each".
-4. Calculate "normalizedUnitCost" as a number based on that unit.
-5. For multi-buys ("2 for $5"): bundleQuantity: 2, bundleTotalPrice: 5.00, salePrice: 2.50, dealType: "multi_buy".
-6. For BOGO without price: isUnpricedPromo: true, salePrice: 0, dealType: "bogo".
-
-STRICT EXCLUSIONS & FILTERS:
-1. FOOD & GROCERY ONLY:
-   Extract ONLY edible food, beverages, and consumable grocery essentials.
-   STRICTLY IGNORE and DROP all non-grocery departments:
-   - NO toys, children's learning sets (e.g., VTech, LeapFrog, LEGO, Barbie)
-   - NO apparel, shoes, or clothing
-   - NO electronics, TVs, video games, or appliances
-   - NO patio, furniture, or home decor
-2. BAN BANNER HEADERS:
-   Never parse store announcements, grand openings (e.g. "Doors opening in College Station"), hiring notices, or weekly circular headers as product deals. Every item MUST be an edible food or household consumer product.
-3. STRICT CONSUMER UNIT MATCHING:
-   Apples, produce, and meats must be priced per standard consumer units ($/lb, $/oz, or per piece), NEVER whole agricultural crates or bulk cases.
-
-Extract authentic advertised items, sales, and butcher shop specials.
-Return ONLY a valid JSON array of deal objects matching DealItem schema.
-`;
-
-        const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
-        let lastLlmError: any = null;
-        for (let i = 0; i < modelsToTry.length; i++) {
-          try {
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('AbortError: Timeout after 25s')), 25000)
-            );
-            const result = (await Promise.race([
-              ai.models.generateContent({
-                model: modelsToTry[i],
-                contents: prompt,
-                config: {
-                  responseMimeType: 'application/json',
-                  responseSchema: dealsResponseSchema,
-                  temperature: 0.1,
-                },
-              }),
-              timeoutPromise,
-            ])) as any;
-            if (result?.text && result.text.trim()) {
-              const parsed = parseJsonFromText<DealItem[]>(result.text, []);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                const sanitized = sanitizeAndValidateDeals(parsed);
-                if (sanitized.length > 0) {
-                  aiDeals = sanitized;
-                  lastLlmError = null;
-                  break;
-                }
-              }
-            }
-          } catch (tierErr: any) {
-            lastLlmError = tierErr;
-            const errMsg = tierErr?.message || String(tierErr);
-            const isQuota =
-              tierErr?.status === 'RESOURCE_EXHAUSTED' ||
-              tierErr?.code === 429 ||
-              errMsg.includes('429') ||
-              errMsg.includes('quota') ||
-              errMsg.includes('Quota exceeded') ||
-              errMsg.includes('RESOURCE_EXHAUSTED');
-            if (isQuota) {
-              globalAiSearchCooldownUntil = Date.now() + 5 * 60 * 1000;
-              console.info(`[Gemini] Live AI search reached quota limit on ${modelsToTry[i]}; activated 5-min cooldown.`);
-              break;
-            }
-            const isUnavailable =
-              tierErr?.status === 'UNAVAILABLE' ||
-              tierErr?.code === 503 ||
-              errMsg.includes('503') ||
-              errMsg.includes('UNAVAILABLE') ||
-              errMsg.includes('high demand');
-            if (isUnavailable) {
-              console.info(`[Gemini] Model ${modelsToTry[i]} experiencing high demand; trying next fallback model.`);
-              continue;
-            }
-          }
-        }
-
-        if (aiDeals.length === 0) {
-          console.info('[Gemini] Live AI search unavailable or rate-limited; falling back to curated circular specials.');
-        }
-      } catch (error: any) {
-        console.info('[Gemini] Live Search fallback triggered: using curated store specials.');
-      }
-    }
-  }
-
-  // Combine deals from all stores with genuine live circulars
-  const nonKarnsDeals: DealItem[] = [];
+  // 7. ZERO-TOLERANCE FILTER: ONLY retain stores with REAL circular items
+  // Under NO circumstances call any fallback deal generator. If a store has no deals, it has 0 deals.
+  const authenticDeals: DealItem[] = [...karnsDeals];
   const activeStores: Store[] = [];
 
-  if (karnsStore) {
-    if (karnsDeals.length > 0) {
-      activeStores.push(karnsStore);
-    } else {
-      karnsDeals = generateCuratedCircularDeals(karnsStore);
-      karnsStore.totalDealsCount = karnsDeals.length;
-      activeStores.push(karnsStore);
-    }
+  if (karnsStore && karnsDeals.length > 0) {
+    activeStores.push(karnsStore);
   }
 
   for (const store of otherStores) {
-    const liveItems = liveDealsByStore.get(store.id);
-    if (liveItems && liveItems.length > 0) {
-      nonKarnsDeals.push(...liveItems);
+    const dealsForStore = liveDealsByStore.get(store.id);
+    if (dealsForStore && dealsForStore.length > 0) {
+      authenticDeals.push(...dealsForStore);
       activeStores.push(store);
-    } else {
-      // Check if AI found deals for this store
-      const matchingAi = aiDeals.filter(
-        (d) => d.storeId === store.id || d.storeName?.toLowerCase().includes(store.name.toLowerCase())
-      );
-      if (matchingAi.length > 0) {
-        matchingAi.forEach((d, idx) => {
-          d.storeId = store.id;
-          d.storeName = store.name;
-          d.storeLogoBg = store.logoBg;
-          d.storeLogoText = store.logoText;
-          if (!d.id) d.id = `${store.id}-ai-${idx + 1}-${Date.now()}`;
-        });
-        store.totalDealsCount = matchingAi.length;
-        nonKarnsDeals.push(...matchingAi);
-        activeStores.push(store);
-      } else {
-        // Fallback: Generate curated, realistic authentic circular specials for this store
-        const curated = generateCuratedCircularDeals(store);
-        if (curated.length > 0) {
-          store.totalDealsCount = curated.length;
-          nonKarnsDeals.push(...curated);
-          activeStores.push(store);
-        }
-      }
     }
   }
 
-  // If still no active stores, populate from stores
-  if (activeStores.length === 0) {
-    for (const store of stores) {
-      const curated = generateCuratedCircularDeals(store);
-      if (curated.length > 0) {
-        store.totalDealsCount = curated.length;
-        nonKarnsDeals.push(...curated);
-        activeStores.push(store);
-      }
-    }
-  }
-
-  const finalStores = activeStores.length > 0 ? activeStores : stores;
-  const combinedDeals = [...karnsDeals, ...nonKarnsDeals];
+  // Ensure unique deal IDs
   const seenDealIds = new Set<string>();
-  combinedDeals.forEach((d, idx) => {
+  authenticDeals.forEach((d, idx) => {
     if (!d.id || seenDealIds.has(d.id)) {
       d.id = `${d.storeId || 'deal'}-${idx + 1}-${Date.now()}`;
     }
     seenDealIds.add(d.id);
   });
 
-  const sanitizedCombinedDeals = sanitizeAndValidateDeals(combinedDeals);
-
-  // Execute server-side Vision OCR enrichment on candidate deals
-  let finalDeals = sanitizedCombinedDeals;
-  if (ai && Array.isArray(finalDeals) && finalDeals.length > 0) {
-    if (Date.now() >= globalOcrCooldownUntil) {
-      try {
-        finalDeals = await enrichDealsWithOCR(ai, finalDeals);
-      } catch (ocrErr: any) {
-        const errMsg = ocrErr?.message || String(ocrErr);
-        if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota')) {
-          globalOcrCooldownUntil = Date.now() + 5 * 60 * 1000;
-        }
-        console.info('[GeminiService] enrichDealsWithOCR skipped; keeping standard circular data.');
-      }
-    }
-  }
-
-  // === LOCAL DETERMINISTIC CLASSIFICATION FIRST (5ms) ===
-  sanitizedCombinedDeals.forEach((d) => {
+  // 8. Deterministic Syntactic Categorization on Authentic Deals ONLY
+  const categorizedDeals = authenticDeals.map((d) => {
     const localCat = classifyItemDeterministically(d.title, d.brand);
     const { headNoun } = extractSyntacticHeadNoun(d.title, d.brand);
     d.coreBaseNoun = headNoun;
-    d.genericProductGroup = localCat;
-    d.subtitle = `Noun: [${headNoun}] -> Key: [${localCat}]`;
-  });
-  finalDeals = sanitizedCombinedDeals;
-
-  // Ensure every deal has a normalized brandMatchKey for 1-to-1 branded comparisons
-  finalDeals.forEach(d => {
-    if (!d.brandMatchKey) {
-      d.brandMatchKey = cleanBrandMatchKey(d.title, d.brand);
-    }
+    d.genericProductGroup = localCat || 'uncomparable';
+    d.subtitle = `Noun: [${headNoun}] -> Key: [${d.genericProductGroup}]`;
+    return d;
   });
 
-  // CRITICAL: Re-run the UOM Math contract as the final step to lock in AI category & price modifications
-  finalDeals = finalDeals.map(sanitizeDealItem);
+  // 9. Standardize Unit Pricing Contract
+  const finalDeals = sanitizeDealList(categorizedDeals);
 
-  // Update store deal counters with final counts
+  // 10. Update Store Counts
   const counts: Record<string, number> = {};
   finalDeals.forEach((d) => {
     counts[d.storeId] = (counts[d.storeId] || 0) + 1;
   });
-  finalStores.forEach((s) => {
+  activeStores.forEach((s) => {
     s.totalDealsCount = counts[s.id] || 0;
   });
 
-  const result = { stores: finalStores, deals: finalDeals };
+  const result = { stores: activeStores, deals: finalDeals };
   circularsCache.set(cacheKey, { timestamp: Date.now(), data: result });
   return result;
 }
@@ -1735,6 +1554,12 @@ export interface ParsedProductSyntax {
 }
 
 export function extractSyntacticHeadNoun(rawTitle: string, brand?: string | null): ParsedProductSyntax {
+  const PACKAGING_WORDS = new Set([
+    'bag', 'bags', 'box', 'boxes', 'pack', 'packs', 'pkg', 'pkgs', 'package', 'packages',
+    'bunch', 'bunches', 'container', 'containers', 'tub', 'tubs', 'jar', 'jars', 'can', 'cans',
+    'bottle', 'bottles', 'clamshell', 'clamshells', 'jug', 'jugs', 'carton', 'cartons'
+  ]);
+
   // Stage 1: Strip parentheticals, measurements, and punctuation
   const clean = rawTitle
     .replace(/\(.*?\)/g, '')
@@ -1742,7 +1567,7 @@ export function extractSyntacticHeadNoun(rawTitle: string, brand?: string | null
     .replace(/[^a-zA-Z0-9\s-]/g, ' ')
     .trim();
 
-  const words = clean.split(/\s+/).filter(Boolean);
+  let words = clean.split(/\s+/).filter(Boolean);
   if (words.length === 0) return { brandToken: '', modifiers: [], headNoun: 'unknown' };
 
   let remainingWords = [...words];
@@ -1751,6 +1576,11 @@ export function extractSyntacticHeadNoun(rawTitle: string, brand?: string | null
     const brandWordCount = brand.split(/\s+/).length;
     brandToken = remainingWords.slice(0, brandWordCount).join(' ');
     remainingWords = remainingWords.slice(brandWordCount);
+  }
+
+  // Strip trailing packaging descriptors (e.g. "Navel Oranges 3 lb Bag" -> strip "Bag")
+  while (remainingWords.length > 1 && PACKAGING_WORDS.has(remainingWords[remainingWords.length - 1].toLowerCase())) {
+    remainingWords.pop();
   }
 
   // Syntactic Head Noun is the terminal lexical anchor

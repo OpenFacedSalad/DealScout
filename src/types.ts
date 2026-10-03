@@ -56,6 +56,8 @@ export interface Store {
   totalDealsCount: number;
   featuredCategory: string;
   operatingHours: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface DealItem {
