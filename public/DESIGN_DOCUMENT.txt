@@ -1,128 +1,198 @@
 ================================================================================
 DEALSCOUT - SYSTEM DESIGN DOCUMENT
-Project: DealScout (Grocery Circulars & Unit Price Deal Matcher)
-Version: 2.0.0
-Date: September 2026
-Target Stack: React 18, TypeScript, Tailwind CSS, Express, Vite, Gemini 3.7 Flash
+Project: DealScout (Hyper-Local Grocery Circulars & Unit Price Deal Matcher)
+Version: 2.5.0
+Date: October 2026
+Target Stack: React 18, TypeScript, Tailwind CSS, Express 4, Vite, Gemini 3.7 Flash,
+              Overpass API (OSM), Nominatim, Sharp Multimodal OCR, Service Worker PWA
 ================================================================================
 
 1. EXECUTIVE SUMMARY & OBJECTIVE
 --------------------------------------------------------------------------------
-DealScout is a hyper-local grocery circular aggregator and comparative shopping 
-platform. It empowers shoppers to discover active weekly grocery circular ads 
-from physical supermarkets within a user-defined geographic radius (1, 5, 10, or 
-25 miles) based on live GPS coordinates or manual ZIP/city search.
+DealScout is a high-performance, hyper-local grocery circular aggregator, multimodal 
+flyer digitization platform, and comparative unit-pricing intelligence engine. It empowers 
+shoppers to discover active weekly grocery circular ads from physical supermarkets within 
+a user-defined geographic radius (1, 5, 10, 20, 25, or 50 miles) based on live browser GPS 
+coordinates or manual ZIP code / city search.
 
-Beyond merely displaying digital flyers, DealScout normalizes all product pricing 
-into universal unit costs ($/lb, $/oz, $/unit, $/egg, $/gallon). It automatically 
-groups identical or substitutable items across competing local stores, detects 
-which store offers the lowest price per unit, uses Gemini 3.7 Flash AI to provide 
-deep shopping value analyses (highlighting caveats like loyalty coupons or BOGO 
-rules), and alerts shoppers inside their digital shopping list whenever a cheaper 
-substitute is available at a nearby competitor with a 1-click swap.
+Unlike conventional grocery coupon apps that merely display static PDF flyers or present 
+national deals from stores that do not exist in the shopper's area, DealScout:
+1. Discovers verified local physical supermarket locations using OpenStreetMap Overpass POIs.
+2. Ingests authentic weekly circular deals through a hybrid pipeline of live web scraping, 
+   Google Search Grounding via Gemini 3.7 Flash, and user-uploaded multimodal PDF/image flyer OCR.
+3. Normalizes all product pricing into universal unit economics ($/lb, $/oz, $/unit, $/egg, 
+   $/gallon, $/count, $/dozen), dynamically parsing multi-buys ("2 for $7") and unpriced promos (BOGO).
+4. Groups identical or substitutable commodities across competing local stores using a 
+   rigorous 50+ key commodity taxonomy (e.g. distinguishing citrus types, pasta sauce from BBQ sauce, 
+   cow milk from plant milk).
+5. Employs Gemini 3.7 Flash AI to render decisive, side-by-side shopping value verdicts, 
+   mathematical unit deltas, and purchase restriction caveats.
+6. Continuously monitors the user's digital shopping list in real-time, alerting shoppers 
+   whenever a cheaper alternative exists at a nearby competitor and enabling a 1-click swap.
+7. Operates as an offline-first Progressive Web App (PWA) with background sync queueing, 
+   service worker caching, and native push notification support.
 
 
-2. CORE USER PROBLEMS & SOLUTION VALUE
+2. CORE USER PROBLEMS & SOLUTION ARCHITECTURE
 --------------------------------------------------------------------------------
-Problem 1: Fragmented, PDF-style circular flyers
-Shoppers have to visit multiple grocery store websites/apps (Giant, Weis, Karns, 
+Problem 1: Fragmented, PDF-Style Circular Flyers
+Shoppers currently visit half a dozen disparate grocery websites or apps (Giant, Weis, Karns, 
 ALDI, Wegmans, Target, Trader Joe's) to find weekly sales.
--> Solution: DealScout aggregates all active local flyers into a single, unified, 
-   searchable, and filterable circular feed.
+-> Solution: DealScout aggregates all active local flyers into a single, unified, searchable, 
+   and filterable circular feed.
 
-Problem 2: Deceptive package sizing ("Shrinkflation" & non-standard units)
-A 3-lb pack of ground beef at $11.97 looks different from a 1-lb pack at $4.29.
--> Solution: DealScout calculates normalizedUnitCost for every deal, allowing 
-   direct true-cost comparison across disparate package weights and sizes.
+Problem 2: Deceptive Package Sizing & Shrinkflation
+A 3-lb family pack of chicken breast at $8.97 looks cheaper than a 1.5-lb pack at $5.99, but 
+the unit cost ($2.99/lb vs $3.99/lb) reveals the true value.
+-> Solution: DealScout calculates normalizedUnitCost for every deal across all packaging 
+   weights, enabling instant cross-store comparison.
 
-Problem 3: Geographic irrelevance
-Many grocery coupon apps show national deals for stores that do not exist near 
-the user (e.g. showing Kroger or Safeway in Central Pennsylvania).
--> Solution: DealScout queries real OpenStreetMap supermarket POIs and verified 
-   regional grocery directories, enforcing strict distance radii (1mi, 5mi, 10mi, 25mi).
+Problem 3: Geographic Irrelevance & Phantom Stores
+Coupons often promote chains unavailable in the shopper's region (e.g. Kroger in Central PA).
+-> Solution: DealScout queries live OpenStreetMap supermarket POIs and verified regional 
+   grocery directories, strictly enforcing user radius boundaries (1 to 50 miles).
 
-Problem 4: Hidden Deal Gotchas (Coupons, BOGO, Multi-buys)
-Shoppers often miss that a price requires a digital loyalty clip or buying two items.
--> Solution: DealScout tags each dealType ('sale', 'bogo', 'digital_coupon', 
-   'multi_buy') and uses Gemini AI to warn shoppers about purchase criteria.
+Problem 4: Multi-Buy and Promo Confusion
+Shoppers miss that "2 for $7" means $3.50 each or that BOGO promotions lack a single-item dollar price.
+-> Solution: DealScout's pricing sanitizer detects multi-pack syntax, computes exact per-unit 
+   prices, formats unpriced promos cleanly, and eliminates hallucinated MSRP strikethroughs.
+
+Problem 5: Physical Paper Circulars Not Available Online
+Small independent grocers or newly printed flyers may not be indexed immediately.
+-> Solution: Multimodal Flyer Scanner allows users to upload flyer PDFs, photos, or take camera 
+   snapshots; Gemini 3.7 Flash vision OCR extracts structured deals directly into the store catalog.
+
+Problem 6: Spotty Connectivity in Grocery Store Aisles
+Shoppers often lose mobile internet access deep inside concrete-and-metal grocery stores.
+-> Solution: Full PWA support with service worker caching, safe local storage, and an offline 
+   mutation queue that automatically syncs cart changes when network connectivity returns.
 
 
-3. SYSTEM ARCHITECTURE
+3. SYSTEM ARCHITECTURE & TOPOLOGY
 --------------------------------------------------------------------------------
-DealScout is engineered as a unified Full-Stack React + Express + Vite application:
+DealScout is engineered as a unified Full-Stack Node.js/Express + React/TypeScript architecture:
 
-[ Client (Browser) ]
-       │
-       ├─ GPS Geolocation (navigator.geolocation)
-       ├─ LocalStorage State (shopping list, user location, radius)
-       ├─ UI Components (Tailwind CSS, Lucide icons, responsive layout)
-       │
-       ▼ HTTP (JSON REST API)
-[ Express 4.x Backend Server (Node.js/tsx) ]
-       │
-       ├─ /api/location/resolve  ──> OpenStreetMap Nominatim Forward/Reverse
-       ├─ /api/circulars/nearby  ──> Overpass API (OSM) + Regional Chain Registry
-       │                              + Gemini 3.7 Flash Circular Generator
-       ├─ /api/compare/deals     ──> Gemini 3.7 Flash AI Comparison Engine
-       └─ Vite Dev Middleware / Express Static File Handler (dist/index.html)
++------------------------------------------------------------------------------------+
+|                               CLIENT (Browser / PWA)                               |
+|                                                                                    |
+|  +----------------------+  +---------------------+  +---------------------------+  |
+|  |   Navigator GPS /    |  |  React SPA (Vite)   |  |     Service Worker &      |  |
+|  |  Nominatim Location  |  |  State & Components |  |   Offline Mutation Queue  |  |
+|  +----------------------+  +---------------------+  +---------------------------+  |
+|             │                         │                          │                 |
++-------------┼─────────────────────────┼──────────────────────────┼-----------------+
+              │                         │                          │
+              ▼                         ▼                          ▼
++------------------------------------------------------------------------------------+
+|                         EXPRESS 4.x BACKEND GATEWAY (server.ts)                    |
+|                                                                                    |
+|  +-------------------+  +-----------------------+  +----------------------------+  |
+|  | /location/resolve |  |  /circulars/nearby    |  |  /circulars/parse-flyer    |  |
+|  | Reverse/Forward   |  |  Hybrid Ingestion     |  |  Sharp + Multimodal Vision |  |
+|  +-------------------+  +-----------------------+  +----------------------------+  |
+|  +-------------------+  +-----------------------+  +----------------------------+  |
+|  | /compare/deals    |  |  /cart/sync           |  |  Static & Doc Server       |  |
+|  | Gemini AI Verdict |  |  Mutation Replay      |  |  DESIGN & CODE Docs        |  |
+|  +-------------------+  +-----------------------+  +----------------------------+  |
++-------------┬─────────────────────────┬──────────────────────────┬-----------------+
+              │                         │                          │
+              ▼                         ▼                          ▼
++-----------------------+  +------------------------+  +-----------------------------+
+|  EXTERNAL GEO SERVICES|  |  AI & GROUNDING ENGINE |  |   LIVE SCRAPING SUBSYSTEM   |
+|  - OpenStreetMap      |  |  - Gemini 3.7 Flash    |  |  - Karns Cheerio DOM Scraper|
+|    Overpass POI API   |  |  - Google Search       |  |  - High-Fidelity Snapshot   |
+|  - Nominatim Geocoder |  |    Grounding Tool      |  |    Fallback Repositories    |
++-----------------------+  +------------------------+  +-----------------------------+
 
 
-4. KEY SYSTEM MODULES & SPECIFICATIONS
+4. KEY SUBSYSTEMS & TECHNICAL SPECIFICATIONS
 --------------------------------------------------------------------------------
-4.1 Location & Geographic Radius Engine:
-  - Supports live browser GPS detection (`navigator.geolocation.getCurrentPosition`)
-    and text input (ZIP codes, city/state queries).
-  - Reverse & forward geocodes using OpenStreetMap Nominatim with built-in instant
-    caching for high-density areas (e.g. 17050 Mechanicsburg, PA).
-  - Configurable Radius: Shoppers can choose 1, 5, 10, or 25 miles.
-  - Haversine Distance Formula: Calculates exact distance between user coordinates
-    and supermarket physical coordinates.
-  - Stores outside the chosen radius are strictly filtered out from both the store
-    carousel and deals list.
+4.1 Location & Geographic Radius Subsystem:
+  - Dual Resolution: Live browser GPS (`navigator.geolocation`) and text search (ZIP, City/State).
+  - Geocoding Engine: OpenStreetMap Nominatim with in-memory caching and instant presets for major 
+    regions (e.g., 17050 Mechanicsburg, PA; 78701 Austin, TX; 32801 Orlando, FL).
+  - Configurable Radius: Shoppers select 1, 5, 10, 20, 25, or 50 miles.
+  - Spatial Math: Haversine spherical trigonometric formula calculates exact straight-line mileage.
+  - Strict Boundary Filtering: Stores outside the chosen radius are excluded from deals and comparisons.
 
-4.2 Physical Supermarket POI Discovery:
-  - Direct integration with OpenStreetMap Overpass API (`shop=supermarket` & `shop=grocery`).
-  - Fallback regional grocery directory mapping authentic local supermarket chains
-    based on state/region (e.g., Karns Quality Foods, Giant Food Stores, Weis Markets,
-    ALDI, Wegmans, Target Grocery, Trader Joe's in PA; H-E-B and Kroger in TX;
-    Publix and Winn-Dixie in FL/Southeast).
-  - Maintains store branding (custom logo color badges, operating hours, active flyer names).
+4.2 Store POI Discovery & Hybrid Circular Ingestion Pipeline:
+  - Step 1 (Physical POI Discovery): Queries Overpass API (`shop=supermarket` & `shop=grocery`) 
+    centered on target coordinates. Fallback regional matrices cover verified chains (Karns, Giant, 
+    Weis, ALDI, Wegmans, Target, Trader Joe's, H-E-B, Publix, Kroger, Meijer).
+  - Step 2 (Direct DOM Scraper): For specialized local chains like Karns Quality Foods, a Cheerio-based 
+    scraper extracts authentic meat and produce weekly specials directly from source HTML.
+  - Step 3 (Gemini 3.7 Flash with Search Grounding): Queries current weekly flyer circulars using 
+    Google Search Grounding tools for live prices, promotional validity dates, and store flyers.
+  - Step 4 (Deterministic Fallback Cache): If external network APIs or AI quota limits encounter 
+    cooldowns, the system seamlessly serves curated high-fidelity snapshot circulars.
+  - Step 5 (In-Memory Cache): 10-minute TTL in-memory map keyed by lat/lng/radius prevents duplicate 
+    external requests during frequent client re-renders.
 
-4.3 Deal Normalization & Matching Engine:
-  - Standardizes raw item strings into structured units:
-    * normalizedUnitCost (number)
-    * normalizedUnitType ('lb' | 'oz' | 'unit' | 'gallon' | 'count' | 'dozen')
-    * unitPrice (formatted string: "$1.49 / lb")
-  - Generic Product Grouping (`genericProductGroup`):
-    Matches items across stores by core commodity (e.g. "ground_beef_80_20",
-    "chicken_breast", "large_eggs", "whole_milk", "honeycrisp_apples",
-    "hass_avocados", "strawberries_1lb", "sourdough_bread", "olive_oil_500ml").
-  - Identifies "Best Deal in Group" by finding minimum normalized unit cost.
+4.3 Multimodal Circular Flyer OCR Subsystem:
+  - Multi-format ingestion: Supports PDF circulars, JPEG, PNG, and WebP image uploads or camera captures.
+  - Image Preprocessing: Sharp library converts PDF pages or images, downsamples high-resolution flyers 
+    to fit token constraints, and normalizes orientation.
+  - Multimodal Vision Extraction: Gemini 3.7 Flash analyzes flyer imagery with structured JSON schemas, 
+    extracting product title, subtitle, category, price, unit type, and promo badges.
+  - Payload Handling: Express configured with 25MB body limit to accommodate multi-page circular flyers.
 
-4.4 AI Comparison Engine (Gemini 3.7 Flash):
-  - Server-side invocation using `@google/genai` SDK.
-  - Generates JSON structured responses (`responseMimeType: "application/json"`,
-    `responseSchema`).
-  - Outputs:
-    * bestDealId: Exact ID of the superior offer
-    * verdict: 1-2 sentence decisive summary
-    * keyDifference: Mathematical unit savings or quality differential
-    * unitPriceAdvantage: Formatted unit price delta (e.g. "$0.49/ea vs $0.77/ea - 36% cheaper")
-    * caveats: Purchase restrictions (e.g. digital coupon clipping, multi-item purchase)
+4.4 Pricing Normalization & Deal Sanitizer:
+  - Multi-Buy Syntax Engine: Parses patterns like "2 for $7", "3 for $10", "4/$5" into exact per-unit 
+    costs ($3.50/ea) while retaining the bundle description.
+  - Unpriced Promotion Handling: Identifies BOGO ("Buy 1 Get 1 Free"), "50% Off", and percentage deals 
+    without assigning misleading $0.00 prices or hallucinated MSRP strikethroughs.
+  - Title & Brand Normalization: Removes crawler artifacts (e.g. leading "Branded" prefixes) and extracts 
+    brand keys, flavor variants, and core base nouns.
+  - Universal Unit Cost: Converts disparate package measurements into standardized units:
+    * $/lb (meat, poultry, bulk produce)
+    * $/oz (berries, coffee, sauces, snacks)
+    * $/dozen or $/egg (eggs)
+    * $/gallon (milk, cider, juices)
+    * $/unit or $/count (avocados, bakery items, canned goods)
 
-4.5 Smart Shopping List & Cross-Store Price Alerts:
-  - Persistent shopping list saved in browser `localStorage`.
-  - Supports adding circular flyer items and custom user-entered items.
-  - Real-Time Cross-Store Deal Monitoring:
-    Inspects every item in the cart. If a competing store within radius has a
-    deal on the same genericProductGroup with a lower normalizedUnitCost:
-    * Displays an amber "Cheaper alternative found at [Store]" badge
-    * Shows estimated savings amount
-    * Provides a 1-click "Swap to Cheaper Deal" button to replace the cart item.
-  - Real-time cart total and total savings calculation.
+4.5 Strict Commodity Taxonomy & Matching Engine:
+  - 50+ Normalized Commodity Keys: Prevents false-positive comparisons across incompatible sub-categories:
+    * Citrus separation: `produce_oranges`, `produce_lemons`, `produce_limes`, `produce_grapefruits`.
+    * Sauce separation: `pantry_sauce_pasta` vs `pantry_sauce_bbq`.
+    * Dairy separation: `dairy_milk_cow` vs `dairy_milk_plant`.
+    * Meat cuts: `meat_chicken_breast`, `meat_chicken_wings`, `meat_beef_steak`, `meat_beef_ground`.
+  - Grouping Logic (`dealMatcher.ts` & `grouping.ts`):
+    * Assembles competing deals in the same genericProductGroup.
+    * Sorts items by `normalizedUnitCost` ascending so index 0 represents the mathematical best deal.
+    * Calculates maximum unit price savings percentage and dollar differential across stores.
+
+4.6 AI Comparative Shopping Verdict Subsystem:
+  - Server endpoint `/api/compare/deals` invokes Gemini 3.7 Flash with structured JSON schemas.
+  - Generates:
+    * `bestDealId`: ID of the mathematically or qualitatively superior deal.
+    * `verdict`: Decisive 1-2 sentence recommendation for shoppers.
+    * `keyDifference`: Specific unit price delta, size advantage, or quality tier difference.
+    * `unitPriceAdvantage`: Formatted comparative advantage (e.g., "$0.49/ea vs $0.77/ea - 36% cheaper").
+    * `caveats`: Purchase conditions (digital coupon clipping, minimum quantity, loyalty card required).
+
+4.7 Smart Shopping List & Cross-Store Savings Alerts:
+  - State Storage: Browser `localStorage` via safe wrapper `safeStorage.ts` with quota resilience.
+  - Real-Time Price Monitoring:
+    * Evaluates every list item against all active store deals within radius.
+    * If a competing store offers a lower unit price on the same commodity, generates an alert card:
+      "Cheaper alternative found at [Competitor] - Save $X.XX ($Y.YY/unit vs $Z.ZZ/unit)".
+    * 1-Click Deal Swap: Replaces the existing item with the cheaper alternative instantly.
+  - Multi-store checklist with categorized items, quantity adjustments, and total savings tally.
+
+4.8 Progressive Web App (PWA) & Offline Capabilities:
+  - Service Worker (`sw.js`):
+    * Cache-First strategy for static scripts, styles, icons, and design documents.
+    * Network-First strategy with fallback cache for API circulars and location routes.
+  - Background Sync Queue (`syncQueue.ts` / `useSyncQueue.ts`):
+    * Captures cart mutations (add, toggle, remove, swap) when offline.
+    * Flushes mutations to `/api/cart/sync` when online connectivity is restored.
+  - Install Banner (`InstallBanner.tsx`) & PWA Hook (`usePWAInstall.ts`):
+    * Captures `beforeinstallprompt` and renders a clean, non-intrusive in-app install prompt.
+  - Push Notification Testing Suite (`DevTools.tsx`):
+    * Simulates native system notifications with delay scheduling for background verification.
 
 
-5. DATA CONTRACTS & TYPE SCHEMAS
+5. DATA CONTRACTS & TYPE SPECIFICATIONS
 --------------------------------------------------------------------------------
 - Store:
   {
@@ -153,23 +223,35 @@ DealScout is engineered as a unified Full-Stack React + Express + Vite applicati
     storeLogoText: string;
     title: string;
     subtitle?: string;
+    imageUrl?: string;
+    ocrTranscript?: string;
     category: 'produce' | 'meat_seafood' | 'dairy_eggs' | 'bakery_deli' | 
               'pantry_snacks' | 'frozen' | 'beverages' | 'household';
     originalPrice: number;
     salePrice: number;
+    displayPrice?: string | null;
     discountPercent: number;
     unitPrice: string;
     normalizedUnitCost: number;
-    normalizedUnitType: 'lb' | 'oz' | 'unit' | 'gallon' | 'count' | 'dozen';
+    normalizedUnitType: 'lb' | 'oz' | 'dozen' | 'pkg' | 'each' | 'unit' | 'gallon' | 'count';
     unitDescription: string;
     dealType: 'sale' | 'bogo' | 'digital_coupon' | 'multi_buy' | 'clearance';
     dealBadge?: string;
     validUntil: string;
     inStock: boolean;
     genericProductGroup: string;
+    flavorOrBrand?: string;
+    coreBaseNoun?: string;
+    brandMatchKey?: string;
     tags: string[];
     brand?: string;
     qualityTier?: 'budget' | 'standard' | 'premium' | 'organic';
+    bundleQuantity?: number;
+    bundleTotalPrice?: number | null;
+    isUnpricedPromo?: boolean;
+    hasExplicitOriginalPrice?: boolean;
+    promoBadgeText?: string;
+    hasExplicitDollarPrice?: boolean;
   }
 
 - UserLocation:
@@ -184,17 +266,63 @@ DealScout is engineered as a unified Full-Stack React + Express + Vite applicati
     radiusMiles?: number;
   }
 
+- ComparisonGroup:
+  {
+    genericProductGroup: string;
+    productName: string;
+    category: DealCategory;
+    deals: DealItem[];
+    bestDeal: DealItem;
+    totalStores: number;
+    unitType: NormalizedUnitType;
+    unitPriceDiff: number;
+    maxSavingsPercent: number;
+    aiAnalysis?: AIComparisonResult;
+  }
 
-6. SECURITY & DEPLOYMENT ARCHITECTURE
+- AIComparisonResult:
+  {
+    bestDealId: string;
+    verdict: string;
+    keyDifference: string;
+    unitPriceAdvantage: string;
+    caveats: string;
+  }
+
+- BetterAlternative:
+  {
+    cheaperDeal: DealItem;
+    savingsPerUnit: number;
+    totalPotentialSavings: number;
+    savingsPercent: number;
+    summary: string;
+  }
+
+- ShoppingListItem:
+  {
+    id: string;
+    title: string;
+    quantity: number;
+    checked: boolean;
+    deal?: DealItem;
+    betterAlternative?: BetterAlternative | null;
+    customPrice?: number;
+    notes?: string;
+    createdAt: string;
+  }
+
+
+6. SECURITY, RELIABILITY & DEPLOYMENT ARCHITECTURE
 --------------------------------------------------------------------------------
-- Container Execution: Cloud Run container on port 3000 (0.0.0.0).
-- API Key Security: GEMINI_API_KEY is kept strictly server-side in `server.ts` 
-  and `server/geminiService.ts`. Never exposed to client-side code.
-- Build Process:
-  * Client build: `vite build` -> output to `dist/`
-  * Server bundle: `esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.cjs`
-  * Production run: `node dist/server.cjs`
-- Offline/Resilient Fallbacks: The system degrades gracefully to built-in 
-  regional templates if external geocoding, Overpass API, or Gemini API 
-  experience rate limits or offline conditions.
+- Container Execution: Node.js 20+ runtime serving Express on port 3000 (0.0.0.0).
+- API Key Protection: GEMINI_API_KEY is restricted strictly to backend code (`server.ts`, `geminiService.ts`). 
+  Never exposed to the browser client or client bundles.
+- Request Safety & CORS: Configured CORS middleware supporting cross-origin access and OPTIONS preflight.
+- Resilient Fallback Cascades:
+  * Overpass API failure -> Falls back to regional store directory matrices.
+  * Live Scraper failure -> Falls back to Gemini Search Grounding.
+  * Gemini AI quota limits -> Falls back to curated weekly circular snapshots.
+  * Offline network state -> Serves cached circulars and queues local cart mutations.
+- Documentation Endpoints: Built-in `/DESIGN_DOCUMENT.txt` and `/CODE_STRUCTURE.txt` plain-text streaming 
+  routes ensure seamless in-app viewing and 1-click file downloads.
 ================================================================================

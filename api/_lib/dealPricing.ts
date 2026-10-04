@@ -5,55 +5,43 @@ const GROUND_MEAT_FAT_RATIO_REGEX = /\b(70\/30|73\/27|75\/25|80\/20|85\/15|90\/1
 
 // THE STRICT UOM CONTRACT: Mandates the unit for every category
 const CATEGORY_UOM_CONTRACT: Record<string, string> = {
-  // Produce (By the Pound)
+  // Produce
   "produce_apples": "lb", "produce_bananas": "lb", "produce_grapes_conventional": "lb", "produce_grapes_organic": "lb", 
   "produce_oranges": "lb", "produce_potatoes": "lb", "produce_sweet_potatoes": "lb", "produce_onions": "lb", 
   "produce_broccoli": "lb", "produce_squash": "lb", "produce_tomatoes": "lb",
-  // Produce (By the Ounce / Pint)
   "produce_strawberries": "oz", "produce_blueberries": "oz", "produce_cane_berries": "oz", "produce_mushrooms": "oz", "produce_salad_greens": "oz",
-  // Produce (Each)
   "produce_lemons": "each", "produce_limes": "each", "produce_grapefruits": "each", "produce_melons": "each", 
   "produce_avocados": "each", "produce_cauliflower": "each", "produce_carrots": "each", "produce_celery": "each", 
   "produce_corn": "each", "produce_cucumbers": "each", "produce_peppers": "each",
-
-  // Meat & Seafood (By the Pound)
+  // Meat & Seafood
   "meat_chicken_breast": "lb", "meat_chicken_dark": "lb", "meat_chicken_wings": "lb", "meat_chicken_whole": "lb",
   "meat_beef_ground": "lb", "meat_beef_steak": "lb", "meat_beef_roast": "lb", "meat_pork_chops": "lb", 
   "meat_pork_roast": "lb", "meat_pork_ribs": "lb", "meat_pork_ham": "lb", "meat_sausage": "lb", "meat_turkey_ground": "lb",
   "meat_seafood_salmon": "lb", "meat_seafood_whitefish": "lb", "meat_seafood_shrimp": "lb", "meat_seafood_shellfish": "lb",
-  // Meat (By the Ounce)
   "meat_bacon": "oz", "pantry_seafood_canned": "oz",
-
-  // Dairy (Mixed)
-  "dairy_eggs": "dozen",
-  "dairy_milk_cow": "gallon", "dairy_milk_plant": "fl oz",
+  // Dairy 
+  "dairy_eggs": "dozen", "dairy_milk_cow": "gallon", "dairy_milk_plant": "fl oz",
   "dairy_butter_margarine": "oz", "dairy_cheese_shredded": "oz", "dairy_cheese_sliced_block": "oz", 
   "dairy_cream_cheese": "oz", "dairy_yogurt": "oz", "dairy_sour_cream": "oz", "dairy_cottage_cheese": "oz", 
   "dairy_cream": "fl oz", "dairy_creamer": "fl oz",
-
   // Bakery & Deli
   "bakery_bread_sandwich": "each", "bakery_bread_artisan": "each", "bakery_breakfast_breads": "pkg", 
   "bakery_buns": "pkg", "bakery_tortillas": "each", "deli_cold_cuts": "lb",
-
-  // Pantry (By the Ounce)
+  // Pantry
   "pantry_pasta": "oz", "pantry_sauce_pasta": "oz", "pantry_sauce_bbq": "oz", "pantry_rice_grains": "lb", 
   "pantry_beans_canned": "oz", "pantry_tomatoes_canned": "oz", "pantry_soup_broth": "oz", "pantry_cereal": "oz", 
   "pantry_oatmeal": "oz", "pantry_baking_basics": "lb", "pantry_cooking_oil": "fl oz", "pantry_nut_spreads": "oz", 
   "pantry_coffee": "oz", "pantry_coffee_pods": "each",
-
   // Frozen
   "frozen_pizza": "each", "frozen_vegetables": "oz", "frozen_fruit": "oz", "frozen_waffles_pancakes": "each", 
   "frozen_ice_cream": "fl oz", "frozen_potatoes": "oz", "frozen_meals": "each",
-
   // Beverages
   "beverages_water": "each", "beverages_soda_12pk": "pkg", "beverages_soda_2liter": "each", 
   "beverages_juice_orange": "fl oz", "beverages_juice_shelf": "fl oz", "beverages_sports": "fl oz", 
   "beverages_energy": "each", "beverages_seltzer": "each",
-
   // Snacks
   "snacks_potato_chips": "oz", "snacks_tortilla_chips": "oz", "snacks_pretzels": "oz", "snacks_crackers": "oz", 
   "snacks_popcorn": "oz", "snacks_nuts": "oz",
-
   // Household
   "household_paper_towels": "each", "household_bath_tissue": "each", "household_laundry_detergent_liquid": "fl oz", 
   "household_laundry_detergent_pods": "each", "household_dish_liquid": "fl oz", "household_dishwasher_pods": "each", 
@@ -61,17 +49,15 @@ const CATEGORY_UOM_CONTRACT: Record<string, string> = {
 };
 
 export function sanitizeDealItem(deal: any): DealItem {
-  let title = String(deal.title || deal.name || '').trim();
-  title = title.replace(/^Branded\s+/i, '').replace(/\s+/g, ' ');
-  
+  let title = String(deal.title || deal.name || '').trim().replace(/^Branded\s+/i, '').replace(/\s+/g, ' ');
   const subtitle = String(deal.subtitle || '').trim();
   const rawBadge = String(deal.dealBadge || deal.promoBadgeText || '').trim();
   const ocr = String(deal.ocrTranscript || '').trim();
   const corpus = `${ocr} ${title} ${subtitle} ${rawBadge}`.toLowerCase();
 
-  // 1. Hardened Multi-Buy Detection
+  // 1. Hardened Multi-Buy Detection (Requires a literal dollar sign to trigger "2 for $5", ignoring "80/20")
   const cleanCorpusForMultiBuy = corpus.replace(GROUND_MEAT_FAT_RATIO_REGEX, ' ');
-  const multiMatch = cleanCorpusForMultiBuy.match(/\b([2-9]|1[0-2])\s*(?:for|\/\s*\$)\s*\$?(\d+(?:\.\d{2})?)\b/i);
+  const multiMatch = cleanCorpusForMultiBuy.match(/\b([2-9]|1[0-2])\s*(?:for\s*\$?|\/\s*\$)(\d+(?:\.\d{2})?)\b/i);
 
   let bundleQuantity: number | undefined = deal.bundleQuantity;
   let bundleTotalPrice: number | undefined = deal.bundleTotalPrice;
@@ -110,12 +96,11 @@ export function sanitizeDealItem(deal: any): DealItem {
 
   const origPrice = typeof deal.originalPrice === 'number' ? deal.originalPrice : parseFloat(String(deal.originalPrice || '0').replace(/[^0-9.]/g, '')) || 0;
 
-  // Hard clamp on hallucinated bundle quantities (e.g. 80/20 beef parsed as 80 items)
+  // Hard clamp on hallucinated bundle quantities 
   if (bundleQuantity && bundleQuantity > 12) {
     bundleQuantity = undefined;
     bundleTotalPrice = undefined;
     dealType = 'sale';
-    // Recover salePrice if it was crushed by a massive division
     if (salePrice < 0.50 && origPrice > 1.00) {
       salePrice = origPrice;
     }
@@ -128,8 +113,7 @@ export function sanitizeDealItem(deal: any): DealItem {
   let displayUnitPrice = `$${salePrice.toFixed(2)} each`;
 
   if (!isUnpricedPromo) {
-    if (targetUOM === 'each') {
-      // Hunt for multi-packs to divide down to the true single 'each' price
+    if (targetUOM === 'each' || targetUOM === 'pkg') {
       const countMatch = corpus.match(/(\d+)\s*(?:ct|count|pk|pack|pack\b|pk\b)/i) || corpus.match(/(?:pack of|box of)\s*(\d+)/i);
       if (countMatch && parseInt(countMatch[1], 10) > 1 && parseInt(countMatch[1], 10) < 50) {
         const count = parseInt(countMatch[1], 10);
@@ -138,24 +122,20 @@ export function sanitizeDealItem(deal: any): DealItem {
         unitDescription = `${count}-pack ($${salePrice.toFixed(2)} total)`;
       } else {
         finalUnitCost = salePrice;
-        displayUnitPrice = `$${salePrice.toFixed(2)} each`;
+        displayUnitPrice = `$${salePrice.toFixed(2)} ${targetUOM === 'pkg' ? 'each' : targetUOM}`;
       }
     } else {
-      // Check if price is ALREADY presented per target unit (e.g., "$3.99 / lb")
       const explicitUnitRegex = new RegExp(`(\\/|per)\\s*${targetUOM}`, 'i');
       if (explicitUnitRegex.test(deal.unitPrice || '') || explicitUnitRegex.test(corpus)) {
         finalUnitCost = salePrice;
         displayUnitPrice = `$${salePrice.toFixed(2)} / ${targetUOM}`;
       } else {
-        // Hunt for volume/weight in the text
         const sizeMatch = corpus.match(/(\d+(?:\.\d+)?)\s*(-)?\s*(oz|ounce|ounces|lb|lbs|pound|pounds|fl oz|gal|gallon|pt|qt|liter|l|ml)\b/i);
-        
         if (sizeMatch) {
           const amount = parseFloat(sizeMatch[1]);
           const unitStr = sizeMatch[3].toLowerCase();
           let divisor = 0;
 
-          // Convert found unit to Target UOM
           if (targetUOM === 'oz') {
             if (unitStr.startsWith('lb') || unitStr.startsWith('pound')) divisor = amount * 16;
             else if (unitStr.startsWith('oz') || unitStr.startsWith('ounce')) divisor = amount;
@@ -172,18 +152,14 @@ export function sanitizeDealItem(deal: any): DealItem {
           }
 
           if (divisor > 0) {
-            // Apply Multi-Buy quantity to divisor if applicable (e.g. 2 for $5, each is 12oz -> divisor is 12)
-            // Note: Since salePrice is already divided to a per-package price (e.g. 2.50), we only divide by the single package size (12).
             finalUnitCost = Number((salePrice / divisor).toFixed(4));
             displayUnitPrice = `$${finalUnitCost.toFixed(2)} / ${targetUOM}`;
           } else {
-            // Flag as failed
             finalUnitCost = 9999;
             finalUnitType = 'UOM not found';
             displayUnitPrice = 'UOM not found';
           }
         } else {
-          // Flag as failed
           finalUnitCost = 9999;
           finalUnitType = 'UOM not found';
           displayUnitPrice = 'UOM not found';
@@ -226,21 +202,20 @@ export function isValidGroceryDeal(deal: any): boolean {
   if (!/[a-zA-Z]{3,}/.test(title)) return false;
   if (!deal.imageUrl && (!deal.salePrice || deal.salePrice <= 0) && !deal.subtitle) return false;
 
+  const titleLower = title.toLowerCase();
+  const subLower = String(deal.subtitle || '').toLowerCase();
+  const badgeLower = String(deal.promoBadgeText || deal.dealBadge || '').toLowerCase();
+  const combined = `${titleLower} ${subLower} ${badgeLower}`;
+  
+  const banned = ['vtech', 'leapfrog', 'lego', 'toy', 'doll', 'doors opening', 'grand opening', 'hiring', 'apparel', 'patio'];
+  if (banned.some((b) => combined.includes(b))) return false;
+
   return true;
 }
 
 export function sanitizeDealList(deals: any[]): DealItem[] {
   if (!Array.isArray(deals)) return [];
   return deals
-    .filter((deal) => {
-      if (!deal || !deal.title) return false;
-      if (!isValidGroceryDeal(deal)) return false;
-      const titleLower = String(deal.title).toLowerCase();
-      const badgeLower = String(deal.promoBadgeText || deal.dealBadge || '').toLowerCase();
-      const subLower = String(deal.subtitle || '').toLowerCase();
-      const combined = `${titleLower} ${subLower} ${badgeLower}`;
-      const banned = ['vtech', 'leapfrog', 'lego', 'toy', 'doll', 'doors opening', 'grand opening', 'hiring'];
-      return !banned.some((b) => combined.includes(b));
-    })
+    .filter(isValidGroceryDeal)
     .map(sanitizeDealItem);
 }

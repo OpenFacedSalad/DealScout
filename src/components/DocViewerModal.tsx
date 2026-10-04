@@ -232,7 +232,7 @@ export default function DocViewerModal({
 
         <div className="px-6 py-2.5 border-t border-slate-200 bg-slate-50 flex items-center justify-between text-xs text-slate-500">
           <span>
-            Target Stack: React 18 &bull; Express 4 &bull; Vite &bull; Gemini 3.7 Flash &bull; Overpass API
+            Target Stack: React 18 &bull; Express 4 &bull; Vite &bull; Gemini 3.7 Flash &bull; Overpass API &bull; Multimodal OCR &bull; PWA
           </span>
           <span className="font-mono">UTF-8 Plaintext</span>
         </div>
